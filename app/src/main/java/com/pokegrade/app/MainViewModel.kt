@@ -81,11 +81,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun acceptPolicy(share: Boolean) {
         settings.acceptedPolicyVersion = POLICY_VERSION
-        setShareScans(share)
+        updateShareScans(share)
         screen = Screen.Camera
     }
 
-    fun setShareScans(on: Boolean) {
+    fun updateShareScans(on: Boolean) {
         settings.shareScans = on
         shareScans = on
         if (on) loadAnonymousId()

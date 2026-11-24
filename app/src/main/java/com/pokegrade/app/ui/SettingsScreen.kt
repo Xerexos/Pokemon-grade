@@ -71,7 +71,7 @@ fun SettingsScreen(vm: MainViewModel) {
         } else {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Upload labelled scans to help improve grading and fake detection", Modifier.weight(1f))
-                Switch(checked = vm.shareScans, onCheckedChange = vm::setShareScans)
+                Switch(checked = vm.shareScans, onCheckedChange = vm::updateShareScans)
             }
             vm.anonymousId?.let { Text("Your anonymous ID: $it", style = MaterialTheme.typography.bodySmall) }
             OutlinedButton(onClick = vm::deleteMyScans) { Text("Delete my uploaded scans") }
