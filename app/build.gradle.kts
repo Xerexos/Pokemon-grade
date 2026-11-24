@@ -80,6 +80,8 @@ dependencies {
     implementation("androidx.camera:camera-camera2:$camerax")
     implementation("androidx.camera:camera-lifecycle:$camerax")
     implementation("androidx.camera:camera-view:$camerax")
+    // Phone maker's processing (Auto/HDR) where supported.
+    implementation("androidx.camera:camera-extensions:$camerax")
 
     // On-device text recognition (reads card name, HP and number).
     implementation("com.google.mlkit:text-recognition:16.0.1")

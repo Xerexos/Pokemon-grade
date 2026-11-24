@@ -62,6 +62,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntSize
+import androidx.camera.extensions.ExtensionMode
+import androidx.camera.extensions.ExtensionsManager
+import androidx.core.content.FileProvider
+import androidx.compose.material.icons.filled.PhotoCamera
 import android.util.Size
 import androidx.camera.core.Camera
 import androidx.camera.core.FocusMeteringAction
@@ -91,6 +95,7 @@ import kotlin.math.roundToInt
 /** Card guide: 63:88 aspect, this share of the preview width. */
 private const val GUIDE_WIDTH = 0.74f
 private const val CARD_ASPECT = 63f / 88f
+private const val MAX_LOAD = 4000
 
 @Composable
 fun CameraScreen(
@@ -107,6 +112,16 @@ fun CameraScreen(
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         uri?.let { loadBitmap(context, it) }?.let(onPhoto)
+    }
+
+    // The phone's own camera app: full manufacturer processing, same quality as gallery photos.
+    val phoneShot = remember {
+        val dir = java.io.File(context.cacheDir, "captures").apply { mkdirs() }
+        val file = java.io.File(dir, "card.jpg")
+        FileProvider.getUriForFile(context, "${context.packageName}.files", file)
+    }
+    val phoneCamera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { saved ->
+        if (saved) loadBitmap(context, phoneShot)?.let(onPhoto)
     }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
@@ -130,6 +145,11 @@ fun CameraScreen(
             IconButton(onClick = {
                 picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
             }) { Icon(Icons.Default.PhotoLibrary, "Pick from gallery", tint = Color.White) }
+            TextButton(onClick = { runCatching { phoneCamera.launch(phoneShot) } }) {
+                Icon(Icons.Default.PhotoCamera, null, tint = Color.White)
+                Spacer(Modifier.width(6.dp))
+                Text("Phone camera", color = Color.White)
+            }
             IconButton(onClick = onSettings) { Icon(Icons.Default.Settings, "Settings", tint = Color.White) }
         }
     }
@@ -163,6 +183,8 @@ private fun CameraPreview(onPhoto: (Bitmap) -> Unit, hint: String) {
     var zoom by remember { mutableStateOf(1f) }
     var torch by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
+    /** Name of the phone maker's processing mode in use, if any. */
+    var enhanced by remember { mutableStateOf<String?>(null) }
 
     DisposableEffect(lifecycleOwner, selectedId) {
         val future = ProcessCameraProvider.getInstance(context)
@@ -173,14 +195,29 @@ private fun CameraPreview(onPhoto: (Bitmap) -> Unit, hint: String) {
             val chosen = list.firstOrNull { it.id == selectedId } ?: list.firstOrNull()
             if (chosen != null && selectedId != chosen.id) selectedId = chosen.id
             val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
-            provider.unbindAll()
-            camera = runCatching {
-                provider.bindToLifecycle(lifecycleOwner, chosen?.selector ?: CameraSelector.DEFAULT_BACK_CAMERA, preview, capture)
-            }.getOrElse {
-                provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, capture)
-            }
-            zoom = 1f
-            torch = false
+            val base = chosen?.selector ?: CameraSelector.DEFAULT_BACK_CAMERA
+            // Use the phone maker's processing (multi-frame, sharpening, HDR) when offered.
+            val extFuture = ExtensionsManager.getInstanceAsync(context, provider)
+            extFuture.addListener({
+                val ext = runCatching { extFuture.get() }.getOrNull()
+                val mode = listOf(ExtensionMode.AUTO, ExtensionMode.HDR).firstOrNull { m ->
+                    runCatching { ext?.isExtensionAvailable(base, m) == true }.getOrDefault(false)
+                }
+                val selector = if (ext != null && mode != null) ext.getExtensionEnabledCameraSelector(base, mode) else base
+                enhanced = when (mode) { ExtensionMode.AUTO -> "Auto"; ExtensionMode.HDR -> "HDR"; else -> null }
+                provider.unbindAll()
+                camera = runCatching {
+                    provider.bindToLifecycle(lifecycleOwner, selector, preview, capture)
+                }.recoverCatching {
+                    enhanced = null
+                    provider.unbindAll()
+                    provider.bindToLifecycle(lifecycleOwner, base, preview, capture)
+                }.getOrElse {
+                    provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, capture)
+                }
+                zoom = 1f
+                torch = false
+            }, ContextCompat.getMainExecutor(context))
         }, ContextCompat.getMainExecutor(context))
         onDispose { runCatching { future.get().unbindAll() } }
     }
@@ -267,7 +304,11 @@ private fun CameraPreview(onPhoto: (Bitmap) -> Unit, hint: String) {
                 Spacer(Modifier.height(8.dp))
             }
             Text(hint, color = Color.White, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 24.dp))
-            Text("Tap the card to focus.", color = Color.White.copy(alpha = 0.7f), style = MaterialTheme.typography.bodySmall)
+            Text(
+                "Tap the card to focus." + (enhanced?.let { " Enhanced mode: $it." } ?: " For the sharpest photo, use \"Phone camera\" at the top."),
+                color = Color.White.copy(alpha = 0.7f), style = MaterialTheme.typography.bodySmall,
+                textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 24.dp),
+            )
             Spacer(Modifier.height(16.dp))
             Box(
                 Modifier.size(76.dp).border(4.dp, Color.White, CircleShape).padding(8.dp)
@@ -348,10 +389,22 @@ private fun cropToGuide(img: Bitmap, view: IntSize): Bitmap {
 private fun loadBitmap(context: Context, uri: Uri): Bitmap? = runCatching {
     if (Build.VERSION.SDK_INT >= 28) {
         val src = ImageDecoder.createSource(context.contentResolver, uri)
-        ImageDecoder.decodeBitmap(src) { decoder, _, _ ->
+        ImageDecoder.decodeBitmap(src) { decoder, info, _ ->
             decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+            // 50-200 MP photos would need hundreds of MB; ~4000 px is plenty for a card.
+            val long = maxOf(info.size.width, info.size.height)
+            if (long > MAX_LOAD) {
+                val k = MAX_LOAD.toDouble() / long
+                decoder.setTargetSize((info.size.width * k).toInt(), (info.size.height * k).toInt())
+            }
         }
     } else {
-        context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        var sample = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= MAX_LOAD) sample *= 2
+        context.contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample })
+        }
     }
 }.getOrNull()
