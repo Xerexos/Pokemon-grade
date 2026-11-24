@@ -81,6 +81,7 @@ import com.pokegrade.core.auth.Verdict
 import com.pokegrade.core.grading.GradeResult
 import com.pokegrade.core.pricing.PriceEstimator
 import com.pokegrade.core.pricing.PriceLinks
+import com.pokegrade.core.pricing.EnglishNames
 
 private val GOOD = Color(0xFF16A34A)
 private val WARN = Color(0xFFD97706)
@@ -139,6 +140,9 @@ private fun Header(a: Analysis, vm: MainViewModel) {
                 c.rarity?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             } else {
                 Text(a.text.name ?: "Unknown card", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                a.text.name?.let { EnglishNames.translate(it) }?.takeIf { it != a.text.name }?.let {
+                    Text(it, style = MaterialTheme.typography.bodyMedium)
+                }
                 Text(a.lookupError ?: "No database match found.", style = MaterialTheme.typography.bodySmall, color = WARN)
             }
             TextButton(onClick = vm::openSearch) {

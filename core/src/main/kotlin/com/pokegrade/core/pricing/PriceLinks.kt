@@ -53,8 +53,18 @@ object EnglishNames {
             ?: species.entries.firstOrNull { it.key.equals(s, ignoreCase = true) }?.value
             // Names can carry extra words ("Team Rocket's ..."); try the longest known name inside.
             ?: species.keys.filter { it.length >= 2 && s.contains(it) }.maxByOrNull { it.length }?.let { species[it] }
+            // OCR often gets one character of a CJK name wrong (卡帶狗 for 卡蒂狗).
+            ?: oneOff(s)?.let { species[it] }
             ?: return null
         return "$region$english$suffix"
+    }
+
+    /** A known CJK name that differs from [s] in exactly one character, if unique. */
+    private fun oneOff(s: String): String? {
+        if (s.length < 3 || s.none { Character.isIdeographic(it.code) || it.code in 0x3040..0x30FF || it.code in 0xAC00..0xD7AF }) return null
+        val hits = species.keys.filter { k -> k.length == s.length && k.indices.count { k[it] != s[it] } == 1 }
+            .map { species[it] }.distinct()
+        return if (hits.size == 1) species.keys.first { k -> k.length == s.length && k.indices.count { k[it] != s[it] } == 1 } else null
     }
 }
 

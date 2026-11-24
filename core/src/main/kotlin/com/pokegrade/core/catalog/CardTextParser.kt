@@ -23,7 +23,7 @@ data class ParsedCardText(
  * Pulls the card name, HP and collector number out of ML Kit OCR output.
  */
 object CardTextParser {
-    private val NUMBER = Regex("""\b([A-Z]{0,4}\d{1,3}[a-z]?)\s*/\s*([A-Z]{0,4}\d{1,3})\b""")
+    private val NUMBER = Regex("""\b([A-Z]{0,4}\d{1,4}[a-z]?)\s*/\s*([A-Z]{0,4}\d{1,4})\b""")
     private val PROMO = Regex("""\b(SWSH\d{3}|SM\d{2,3}|XY\d{2,3}|BW\d{2,3}|SVP?\s?\d{2,3}|HGSS\d{2})\b""")
     // HP is "KP" in German, "PV" in French, "PS" in Spanish/Italian/Portuguese.
     private val HP_AFTER = Regex("""\b(?:HP|KP|PV|PS)\s*(\d{2,3})\b""", RegexOption.IGNORE_CASE)
@@ -67,9 +67,11 @@ object CardTextParser {
         val hangul = text.count { Character.UnicodeBlock.of(it) in HANGUL }
         val han = text.count { Character.UnicodeScript.of(it.code) == Character.UnicodeScript.HAN }
         val thai = text.count { Character.UnicodeScript.of(it.code) == Character.UnicodeScript.THAI }
+        // Readers hallucinate other scripts (the Korean reader "sees" Hangul in Chinese
+        // text), so judge by proportions, not by any single character.
         return when {
-            kana >= 2 -> listOf("ja")
-            hangul >= 2 -> listOf("ko")
+            kana >= 2 && kana >= han * 0.15 -> listOf("ja")
+            hangul >= 2 && hangul >= han * 0.5 -> listOf("ko")
             thai >= 2 -> listOf("th")
             han >= 2 -> {
                 // Simplified (mainland) vs Traditional (Taiwan/HK) Chinese.

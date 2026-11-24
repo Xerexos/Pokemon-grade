@@ -53,4 +53,27 @@ class PriceLinksTest {
         println(q)
         assertEquals("pokemon chinese Captain Pikachu 701 DSG 10", q)
     }
+
+    /** Text exactly as the app read the Hisuian Growlithe (from the user's screenshot). */
+    @Test
+    fun realGrowlitheOcr() {
+        val all = "SEENo.0058 LNRD3 A:0.8m :22.7kg\ntaZRRD3 t 105\nOx2\nH Con5C 0205/07%\n2026 Pokémon/Nintendo / Creatures/GAME FREAK.\n" +
+            "HP80\n40\n全国監No.0058 放明宝可ジ身高:0.8m 体重22.7kg\n将埼上的発技坊放干奔牌区。\n焼光\n鈴文只宝可夢也造成105書。\n。x2l\n础\n洗翠卡帶狗\n" +
+            "全国国鲨o.0058 故听宝可 身高: 0.8m体重:22.7kg\n将场上的竞技场放于弃牌区。\n烧光\n给这只宝可梦也造成10伤害。\n日las5C」 0205/070\n猛撞\n以維想这見\n" +
+            "소No.0058 A고희 a:0.Bm l: 22.7kg\n13토효었H퓨후즈.\n승모코미tE10154"
+        val langs = CardTextParser.detectLanguages(all)
+        println(langs)
+        assertEquals("zh-cn", langs.first())
+        val text = CardTextParser.parse(listOf(
+            OcrLine("洗翠卡帶狗", 0.18, 0.035, 0.03),
+            OcrLine("HP80", 0.74, 0.03, 0.03),
+            OcrLine("日las5C」 0205/070", 0.05, 0.96, 0.012),
+        ) + all.lines().map { OcrLine(it, 0.3, 0.5, 0.01) })
+        assertEquals("0205", text.number)
+        assertEquals("070", text.setTotal)
+        assertEquals("Hisuian Growlithe", EnglishNames.translate("洗翠卡帶狗"))
+        val q = PriceLinks.query(text, null, null)
+        println(q)
+        assertEquals("pokemon chinese Hisuian Growlithe 0205", q)
+    }
 }
