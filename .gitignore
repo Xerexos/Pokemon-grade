@@ -8,3 +8,5 @@ captures/
 *.apk
 *.keystore
 samples/
+__pycache__/
+*.pyc
