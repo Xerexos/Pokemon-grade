@@ -2,10 +2,12 @@ rules_version = '2';
 
 // PokéGrade shared dataset.
 // - Each install signs in anonymously and may only create, read and delete
-//   its own documents.
+//   its own documents. Nobody can update a document after it's written.
 // - Nobody can read other people's uploads from the app. The owner reads
 //   everything with the Admin SDK (tools/dataset/pull_dataset.py), which
-//   bypasses these rules.
+//   bypasses these rules and is the only thing that can set label.verified.
+// - Every field is allow-listed and type/size-checked so a modified client
+//   can't write junk or oversized documents.
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -13,16 +15,72 @@ service cloud.firestore {
     function ownsNew() { return signedIn() && request.resource.data.uid == request.auth.uid; }
     function ownsExisting() { return signedIn() && resource.data.uid == request.auth.uid; }
 
+    function optString(m, k, maxLen) {
+      return !(k in m) || m[k] == null || (m[k] is string && m[k].size() <= maxLen);
+    }
+    function optNumber(m, k) {
+      return !(k in m) || m[k] == null || m[k] is number;
+    }
+    function optMap(m, k) {
+      return !(k in m) || m[k] == null || m[k] is map;
+    }
+
+    function validLabel(l) {
+      return l is map
+        && l.keys().hasOnly(['type', 'company', 'grade', 'certNumber', 'verified'])
+        && l.type in ['GRADED_SLAB', 'PULLED_GENUINE', 'CONFIRMED_FAKE']
+        && l.verified == false
+        && (!('company' in l) || l.company == null || l.company in ['PSA', 'BGS', 'CGC'])
+        && (!('grade' in l) || l.grade == null || (l.grade is number && l.grade >= 1 && l.grade <= 10))
+        && (!('certNumber' in l) || l.certNumber == null
+            || (l.certNumber is string && l.certNumber.matches('^[0-9]{6,12}$')));
+    }
+
+    function validCard(c) {
+      return c == null || (c is map
+        && c.keys().hasOnly(['id', 'name', 'set', 'number', 'rarity'])
+        && optString(c, 'id', 60) && optString(c, 'name', 80) && optString(c, 'set', 80)
+        && optString(c, 'number', 20) && optString(c, 'rarity', 60));
+    }
+
+    function validOcr(o) {
+      return o is map
+        && o.keys().hasOnly(['name', 'hp', 'number', 'setTotal'])
+        && optString(o, 'name', 80) && optNumber(o, 'hp')
+        && optString(o, 'number', 20) && optString(o, 'setTotal', 20);
+    }
+
+    function validImages(scanId, imgs) {
+      return imgs is map
+        && imgs.keys().hasOnly(['front', 'back'])
+        && 'front' in imgs
+        && imgs.front == scanId + '_front'
+        && (!('back' in imgs) || imgs.back == scanId + '_back');
+    }
+
     match /scans/{scanId} {
       allow create: if ownsNew()
-        && request.resource.data.label.type in ['GRADED_SLAB', 'PULLED_GENUINE', 'CONFIRMED_FAKE']
-        // Only the owner's tools may mark a label as verified.
-        && request.resource.data.label.verified == false;
+        && request.resource.data.keys().hasOnly(
+             ['uid', 'createdAt', 'appVersion', 'label', 'card', 'ocr', 'grade', 'back', 'appVerdict', 'images'])
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.appVersion is string && request.resource.data.appVersion.size() <= 20
+        && validLabel(request.resource.data.label)
+        && validCard(request.resource.data.get('card', null))
+        && validOcr(request.resource.data.ocr)
+        && request.resource.data.grade is map
+        && optMap(request.resource.data, 'back')
+        && request.resource.data.appVerdict is map
+        && validImages(scanId, request.resource.data.images);
       allow read, delete: if ownsExisting();
+      // No updates from the app.
     }
 
     match /scanImages/{imageId} {
       allow create: if ownsNew()
+        && request.resource.data.keys().hasOnly(['uid', 'scanId', 'kind', 'jpeg'])
+        && request.resource.data.kind in ['front', 'back']
+        && request.resource.data.scanId is string && request.resource.data.scanId.size() <= 40
+        && imageId == request.resource.data.scanId + '_' + request.resource.data.kind
         && request.resource.data.jpeg is bytes
         && request.resource.data.jpeg.size() < 900000;
       allow read, delete: if ownsExisting();
