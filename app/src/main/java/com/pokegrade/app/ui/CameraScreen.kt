@@ -51,7 +51,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.Size as GeoSize
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
@@ -62,6 +62,26 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntSize
+import android.util.Size
+import androidx.camera.core.Camera
+import androidx.camera.core.FocusMeteringAction
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.filled.Cameraswitch
+import androidx.compose.material.icons.filled.FlashOff
+import androidx.compose.material.icons.filled.FlashOn
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.input.pointer.pointerInput
+import com.pokegrade.app.camera.BackCamera
+import com.pokegrade.app.camera.BackCameras
+import java.util.concurrent.TimeUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
@@ -121,30 +141,133 @@ private fun CameraPreview(onPhoto: (Bitmap) -> Unit, hint: String) {
     val lifecycleOwner = LocalLifecycleOwner.current
     val previewView = remember { PreviewView(context).apply { scaleType = PreviewView.ScaleType.FILL_CENTER } }
     val capture = remember {
-        ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY).build()
+        ImageCapture.Builder()
+            .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+            // Sharpest 4:3 photo up to ~12 MP: plenty for a card, and full 50-200 MP
+            // frames would use hundreds of MB of memory.
+            .setResolutionSelector(
+                ResolutionSelector.Builder()
+                    .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+                    .setResolutionStrategy(
+                        ResolutionStrategy(Size(4032, 3024), ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER),
+                    )
+                    .build(),
+            )
+            .build()
     }
     var viewSize by remember { mutableStateOf(IntSize.Zero) }
     var busy by remember { mutableStateOf(false) }
+    var cameras by remember { mutableStateOf<List<BackCamera>>(emptyList()) }
+    var selectedId by remember { mutableStateOf(BackCameras.savedId(context)) }
+    var camera by remember { mutableStateOf<Camera?>(null) }
+    var zoom by remember { mutableStateOf(1f) }
+    var torch by remember { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
 
-    DisposableEffect(lifecycleOwner) {
+    DisposableEffect(lifecycleOwner, selectedId) {
         val future = ProcessCameraProvider.getInstance(context)
         future.addListener({
             val provider = future.get()
+            val list = runCatching { BackCameras.list(provider) }.getOrDefault(emptyList())
+            cameras = list
+            val chosen = list.firstOrNull { it.id == selectedId } ?: list.firstOrNull()
+            if (chosen != null && selectedId != chosen.id) selectedId = chosen.id
             val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
             provider.unbindAll()
-            provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, capture)
+            camera = runCatching {
+                provider.bindToLifecycle(lifecycleOwner, chosen?.selector ?: CameraSelector.DEFAULT_BACK_CAMERA, preview, capture)
+            }.getOrElse {
+                provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, capture)
+            }
+            zoom = 1f
+            torch = false
         }, ContextCompat.getMainExecutor(context))
         onDispose { runCatching { future.get().unbindAll() } }
+    }
+
+    fun focusAt(x: Float, y: Float, then: (() -> Unit)? = null) {
+        val cam = camera
+        if (cam == null) {
+            then?.invoke()
+            return
+        }
+        val point = previewView.meteringPointFactory.createPoint(x, y)
+        val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
+            .setAutoCancelDuration(4, TimeUnit.SECONDS)
+            .build()
+        val result = cam.cameraControl.startFocusAndMetering(action)
+        if (then != null) {
+            // Capture once focus settles, or after 1.5 s if the lens never reports back.
+            var done = false
+            val go = Runnable { if (!done) { done = true; then() } }
+            result.addListener(go, ContextCompat.getMainExecutor(context))
+            previewView.postDelayed(go, 1500)
+        }
     }
 
     Box(Modifier.fillMaxSize().onSizeChanged { viewSize = it }) {
         AndroidView({ previewView }, Modifier.fillMaxSize())
         GuideOverlay()
+        // Transparent layer above the preview: tap anywhere to focus there.
+        Box(Modifier.fillMaxSize().pointerInput(camera) { detectTapGestures { focusAt(it.x, it.y) } })
+
+        // Camera picker + torch, below the gallery/settings row.
+        Row(
+            Modifier.align(Alignment.TopCenter).padding(top = 36.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (cameras.size > 1) {
+                Box {
+                    TextButton(onClick = { menuOpen = true }) {
+                        Icon(Icons.Default.Cameraswitch, null, tint = Color.White)
+                        Spacer(Modifier.width(6.dp))
+                        Text(cameras.firstOrNull { it.id == selectedId }?.label ?: "Camera", color = Color.White)
+                    }
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        cameras.forEach { cam ->
+                            DropdownMenuItem(
+                                text = { Text(cam.label + if (cam.id == selectedId) "  ✓" else "") },
+                                onClick = {
+                                    menuOpen = false
+                                    BackCameras.save(context, cam.id)
+                                    selectedId = cam.id
+                                },
+                            )
+                        }
+                    }
+                }
+            } else {
+                cameras.firstOrNull()?.let { Text(it.label, color = Color.White, style = MaterialTheme.typography.labelMedium) }
+            }
+            if (camera?.cameraInfo?.hasFlashUnit() == true) {
+                IconButton(onClick = { torch = !torch; camera?.cameraControl?.enableTorch(torch) }) {
+                    Icon(if (torch) Icons.Default.FlashOn else Icons.Default.FlashOff, "Light", tint = Color.White)
+                }
+            }
+        }
+
         Column(
             Modifier.align(Alignment.BottomCenter).padding(bottom = 36.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            // Zoom presets. 2x often switches to the telephoto lens, which gives a
+            // flatter, less distorted card photo from a bit further away.
+            val maxZoom = camera?.cameraInfo?.zoomState?.value?.maxZoomRatio ?: 1f
+            if (maxZoom >= 1.5f) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(1f, 1.5f, 2f, 3f).filter { it <= maxZoom }.forEach { z ->
+                        FilterChip(
+                            selected = zoom == z,
+                            onClick = { zoom = z; camera?.cameraControl?.setZoomRatio(z) },
+                            label = { Text("${if (z % 1f == 0f) z.toInt().toString() else z.toString()}x") },
+                        )
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+            }
             Text(hint, color = Color.White, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 24.dp))
+            Text("Tap the card to focus.", color = Color.White.copy(alpha = 0.7f), style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.height(16.dp))
             Box(
                 Modifier.size(76.dp).border(4.dp, Color.White, CircleShape).padding(8.dp)
@@ -154,18 +277,21 @@ private fun CameraPreview(onPhoto: (Bitmap) -> Unit, hint: String) {
                     enabled = !busy,
                     onClick = {
                         busy = true
-                        capture.takePicture(ContextCompat.getMainExecutor(context), object : ImageCapture.OnImageCapturedCallback() {
-                            override fun onCaptureSuccess(image: ImageProxy) {
-                                val full = image.toUprightBitmap()
-                                image.close()
-                                busy = false
-                                onPhoto(cropToGuide(full, viewSize))
-                            }
+                        // Focus on the card (centre of the guide) before taking the photo.
+                        focusAt(viewSize.width / 2f, viewSize.height / 2f) {
+                            capture.takePicture(ContextCompat.getMainExecutor(context), object : ImageCapture.OnImageCapturedCallback() {
+                                override fun onCaptureSuccess(image: ImageProxy) {
+                                    val full = image.toUprightBitmap()
+                                    image.close()
+                                    busy = false
+                                    onPhoto(cropToGuide(full, viewSize))
+                                }
 
-                            override fun onError(exception: ImageCaptureException) {
-                                busy = false
-                            }
-                        })
+                                override fun onError(exception: ImageCaptureException) {
+                                    busy = false
+                                }
+                            })
+                        }
                     },
                     modifier = Modifier.fillMaxSize(),
                 ) {}
@@ -184,8 +310,8 @@ private fun GuideOverlay() {
         val tl = Offset((size.width - gw) / 2, (size.height - gh) / 2)
         val corner = CornerRadius(gw * 0.048f)
         drawRect(Color.Black.copy(alpha = 0.55f))
-        drawRoundRect(Color.Transparent, tl, Size(gw, gh), corner, blendMode = BlendMode.Clear)
-        drawRoundRect(Color(0xFFF5CD28), tl, Size(gw, gh), corner, style = Stroke(width = 3.dp.toPx()))
+        drawRoundRect(Color.Transparent, tl, GeoSize(gw, gh), corner, blendMode = BlendMode.Clear)
+        drawRoundRect(Color(0xFFF5CD28), tl, GeoSize(gw, gh), corner, style = Stroke(width = 3.dp.toPx()))
     }
 }
 

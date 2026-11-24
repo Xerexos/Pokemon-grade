@@ -78,7 +78,17 @@ class CardAnalyzer(private val catalog: CardCatalog = TcgDexClient()) {
         // Downscale to the grader's working size so its bounds map 1:1 onto this bitmap.
         val working = withContext(Dispatchers.Default) { downscale(photo, GRADER_SIZE) }
         val grade = withContext(Dispatchers.Default) { grader.grade(working.toRgbImage()) }
-        val cardBitmap = crop(working, grade.bounds.left, grade.bounds.top, grade.bounds.width, grade.bounds.height)
+        // Bounds are in the working image; crop the card from the full-resolution photo
+        // (capped at 2000 px) so text reading, the AI check and uploads get the detail.
+        val k = photo.width.toDouble() / working.width
+        val cardBitmap = downscale(
+            crop(
+                photo,
+                (grade.bounds.left * k).toInt(), (grade.bounds.top * k).toInt(),
+                (grade.bounds.width * k).toInt(), (grade.bounds.height * k).toInt(),
+            ),
+            2000,
+        )
 
         onProgress("Reading card text…")
         val text = readText(cardBitmap)
