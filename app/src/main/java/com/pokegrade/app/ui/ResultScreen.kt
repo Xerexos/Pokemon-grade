@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.Arrangement
@@ -67,6 +68,7 @@ import coil.compose.AsyncImage
 import com.pokegrade.app.AiState
 import com.pokegrade.app.MainViewModel
 import com.pokegrade.app.SearchState
+import com.pokegrade.core.catalog.CARD_LANGUAGES
 import com.pokegrade.app.UploadState
 import com.pokegrade.app.data.LabelType
 import com.pokegrade.app.data.ScanLabel
@@ -124,6 +126,10 @@ private fun Header(a: Analysis, vm: MainViewModel) {
             if (c != null) {
                 Text(c.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                 Text("${c.set.name} · #${c.number}/${c.set.printedTotal ?: "?"}", style = MaterialTheme.typography.bodyMedium)
+                if (c.language != "en") {
+                    Text("${CARD_LANGUAGES[c.language] ?: c.language} card", style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary)
+                }
                 c.rarity?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             } else {
                 Text(a.text.name ?: "Unknown card", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
@@ -287,6 +293,10 @@ private fun PriceCard(a: Analysis, vm: MainViewModel) {
         p.rawLowUsd?.let { PriceRow("TCGplayer low", "$" + PriceEstimator.fmt(it)) }
         p.rawHighUsd?.let { PriceRow("TCGplayer high", "$" + PriceEstimator.fmt(it)) }
         p.cardmarketTrendEur?.let { PriceRow("Cardmarket trend", "€" + PriceEstimator.fmt(it)) }
+        if (p.source == "Cardmarket") {
+            Text("No TCGplayer listing for this printing; value converted from Cardmarket (EUR).",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         p.updatedAt?.let { PriceRow("Prices updated", it) }
         Spacer(Modifier.height(6.dp))
         Text(p.explanation, style = MaterialTheme.typography.bodySmall)
@@ -397,6 +407,11 @@ private fun SearchDialog(vm: MainViewModel) {
                         modifier = Modifier.weight(1f),
                     )
                     IconButton(onClick = vm::runSearch) { Icon(Icons.Default.Search, "Search") }
+                }
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    CARD_LANGUAGES.forEach { (code, label) ->
+                        FilterChip(selected = s.language == code, onClick = { vm.updateSearchLanguage(code) }, label = { Text(label) })
+                    }
                 }
                 Spacer(Modifier.height(8.dp))
                 when {

@@ -8,6 +8,37 @@ rules_version = '2';
 //   bypasses these rules and is the only thing that can set label.verified.
 // - Every field is allow-listed and type/size-checked so a modified client
 //   can't write junk or oversized documents.
+//
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: scans    Document ID: auto-generated
+//   - uid: string (required, == request.auth.uid, immutable) - anonymous uploader
+//   - createdAt: timestamp (required, == request.time)
+//   - appVersion: string (required, <= 20 chars)
+//   - label: map (required)
+//       type: 'GRADED_SLAB' | 'PULLED_GENUINE' | 'CONFIRMED_FAKE'
+//       company: null | 'PSA' | 'BGS' | 'CGC'
+//       grade: null | number 1..10
+//       certNumber: null | string of 6-12 digits
+//       verified: false (only the owner's Admin SDK tools may set true)
+//   - card: null | map {id, language, name, set, number, rarity} (strings, length-limited;
+//       language is a TCGdex code: en ja fr de es it pt ko zh-tw zh-cn id th)
+//   - ocr: map {name, hp, number, setTotal}
+//   - grade: map (on-device measurements)
+//   - back: null | map (back-of-card measurements)
+//   - appVerdict: map
+//   - images: map {front: '<scanId>_front', back?: '<scanId>_back'}
+//
+// Collection: scanImages    Document ID: '<scanId>_<kind>'
+//   - uid: string (required, == request.auth.uid)
+//   - scanId: string (<= 40 chars)
+//   - kind: 'front' | 'back'
+//   - jpeg: bytes (< 900 KB)
+//
+// No document can be updated from the app; owners may read/delete their own.
+// ===============================================================
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -38,7 +69,9 @@ service cloud.firestore {
 
     function validCard(c) {
       return c == null || (c is map
-        && c.keys().hasOnly(['id', 'name', 'set', 'number', 'rarity'])
+        && c.keys().hasOnly(['id', 'language', 'name', 'set', 'number', 'rarity'])
+        && (!('language' in c) || c.language == null
+            || c.language in ['en', 'ja', 'fr', 'de', 'es', 'it', 'pt', 'ko', 'zh-tw', 'zh-cn', 'id', 'th'])
         && optString(c, 'id', 60) && optString(c, 'name', 80) && optString(c, 'set', 80)
         && optString(c, 'number', 20) && optString(c, 'rarity', 60));
     }

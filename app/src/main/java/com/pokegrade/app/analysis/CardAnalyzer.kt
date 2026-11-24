@@ -5,6 +5,11 @@ import android.graphics.BitmapFactory
 import android.util.Base64
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.Text
+import com.google.mlkit.vision.text.TextRecognizer
+import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
+import com.google.mlkit.vision.text.japanese.JapaneseTextRecognizerOptions
+import com.google.mlkit.vision.text.korean.KoreanTextRecognizerOptions
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.pokegrade.core.ai.AiInspection
 import com.pokegrade.core.ai.ClaudeCardInspector
@@ -62,7 +67,10 @@ data class Analysis(
 class CardAnalyzer(private val catalog: CardCatalog = TcgDexClient()) {
 
     private val grader = CardGrader()
-    private val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+    private val latin = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+    private val japanese = TextRecognition.getClient(JapaneseTextRecognizerOptions.Builder().build())
+    private val chinese = TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
+    private val korean = TextRecognition.getClient(KoreanTextRecognizerOptions.Builder().build())
     private val referenceCache = HashMap<String, RgbImage?>()
 
     suspend fun analyze(photo: Bitmap, onProgress: (String) -> Unit): Analysis {
@@ -97,16 +105,20 @@ class CardAnalyzer(private val catalog: CardCatalog = TcgDexClient()) {
         return finish(a.cardBitmap, a.grade, a.text, candidates, card, null, a.back, onProgress)
     }
 
-    suspend fun search(name: String): List<CardBrief> = withContext(Dispatchers.IO) { catalog.searchByName(name) }
+    suspend fun search(name: String, language: String): List<CardBrief> =
+        withContext(Dispatchers.IO) { catalog.searchByName(name, language) }
 
-    suspend fun getCard(id: String): TcgCard = withContext(Dispatchers.IO) { catalog.getCard(id) }
+    suspend fun getCard(id: String, language: String): TcgCard = withContext(Dispatchers.IO) { catalog.getCard(id, language) }
 
     /** Scan the back and fold its checks into the authenticity verdict. */
     suspend fun withBack(a: Analysis, photo: Bitmap, reference: BackFeatures?): Analysis {
         val back = withContext(Dispatchers.Default) {
             val located = grader.locateCard(downscale(photo, GRADER_SIZE).toRgbImage())
             val features = BackChecker.features(located.card)
-            val checks = BackChecker.check(features, reference).toMutableList()
+            val checks = if (a.card?.language in ASIAN_BACKS) {
+                // Japanese/Chinese/Korean cards use a different back design.
+                mutableListOf(AuthCheck("Back design", CheckStatus.SKIPPED, "The back check only knows the international (English/European) back.", 1.5))
+            } else BackChecker.check(features, reference).toMutableList()
             if (!located.outlineOk) {
                 checks.add(0, AuthCheck("Back photo", CheckStatus.WARN, "Couldn't find the card's outline clearly; results may be off. Use a dark background.", 0.5))
             }
@@ -165,15 +177,58 @@ class CardAnalyzer(private val catalog: CardCatalog = TcgDexClient()) {
         return Base64.encodeToString(bytes, Base64.NO_WRAP)
     }
 
+    /**
+     * Reads the card with the Latin model and, if the text looks Asian (or the
+     * Latin model finds almost nothing), with the Japanese, Chinese or Korean
+     * model. Those models download through Play services on first use; if one
+     * isn't ready yet we just fall back to what we have.
+     */
     private suspend fun readText(card: Bitmap): ParsedCardText {
-        val result = recognizer.process(InputImage.fromBitmap(card, 0)).await()
+        val image = InputImage.fromBitmap(card, 0)
+        val latinLines = recognize(latin, image, card) ?: emptyList()
+        val latinText = latinLines.joinToString(" ") { it.text }
+        val latinLetters = latinText.count { it.isLetter() }
+
+        var best = latinLines
+        if (latinLetters < 40 || CardTextParser.detectLanguages(latinText).first() != "en" && latinLetters < 80) {
+            // Japanese model also reads Latin text, so it's a safe second opinion.
+            val ja = recognize(japanese, image, card)
+            if (ja != null && cjkCount(ja) >= 2) {
+                best = ja
+                val jaText = ja.joinToString(" ") { it.text }
+                val hasKana = CardTextParser.detectLanguages(jaText).first() == "ja"
+                if (!hasKana) {
+                    // Kanji without kana is probably Chinese.
+                    recognize(chinese, image, card)?.takeIf { cjkCount(it) >= cjkCount(ja) }?.let { best = it }
+                }
+            } else {
+                recognize(korean, image, card)?.takeIf { hangulCount(it) >= 2 }?.let { best = it }
+            }
+        }
+        return CardTextParser.parse(best)
+    }
+
+    private suspend fun recognize(r: TextRecognizer, image: InputImage, card: Bitmap): List<OcrLine>? = try {
+        val result: Text = r.process(image).await()
         val w = card.width.toDouble()
         val h = card.height.toDouble()
-        val lines = result.textBlocks.flatMap { it.lines }.mapNotNull { line ->
+        result.textBlocks.flatMap { it.lines }.mapNotNull { line ->
             val box = line.boundingBox ?: return@mapNotNull null
             OcrLine(line.text, box.left / w, box.top / h, box.height() / h)
         }
-        return CardTextParser.parse(lines)
+    } catch (e: Exception) {
+        null // model not downloaded yet, or recognition failed
+    }
+
+    private fun cjkCount(lines: List<OcrLine>) = lines.sumOf { l ->
+        l.text.count {
+            val sc = Character.UnicodeScript.of(it.code)
+            sc == Character.UnicodeScript.HAN || sc == Character.UnicodeScript.HIRAGANA || sc == Character.UnicodeScript.KATAKANA
+        }
+    }
+
+    private fun hangulCount(lines: List<OcrLine>) = lines.sumOf { l ->
+        l.text.count { Character.UnicodeScript.of(it.code) == Character.UnicodeScript.HANGUL }
     }
 
     private suspend fun loadReference(card: TcgCard): RgbImage? {
@@ -192,6 +247,7 @@ class CardAnalyzer(private val catalog: CardCatalog = TcgDexClient()) {
 
     companion object {
         private const val GRADER_SIZE = 1200 // CardGrader.Config.workingSize
+        private val ASIAN_BACKS = setOf("ja", "ko", "zh-tw", "zh-cn", "th", "id")
 
         fun downscale(bmp: Bitmap, longSide: Int): Bitmap {
             val long = max(bmp.width, bmp.height)

@@ -58,6 +58,8 @@ data class Ability(val name: String, val text: String? = null)
 @Serializable
 data class TcgCard(
     val id: String,
+    /** TCGdex language code, e.g. "en", "ja", "de". */
+    val language: String = "en",
     val name: String,
     val supertype: String? = null,
     val subtypes: List<String> = emptyList(),

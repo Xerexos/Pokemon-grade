@@ -35,6 +35,15 @@ Or build it yourself:
 ./gradlew :core:test                # unit tests (LIVE_API=1 also runs live TCGdex lookups)
 ```
 
+## Languages
+
+Cards are looked up in their own language. The language is detected from the text: kana means Japanese, Hangul means Korean, Chinese characters mean Chinese, and words like "Schwäche" or "Faiblesse" identify European languages. Supported: English, Japanese, French, German, Spanish, Italian, Portuguese, Korean, Chinese (Traditional and Simplified), Indonesian and Thai.
+
+- European prints have TCGplayer and Cardmarket prices.
+- Japanese and other Asian prints mostly have Cardmarket prices only, converted to USD.
+- Japanese, Chinese and Korean text models download through Google Play services after install.
+- The back check only knows the international back, so it's skipped for Asian cards.
+
 ## Tips for accurate results
 
 - **Take the card out** of any sleeve, toploader or case.

@@ -21,9 +21,9 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <!-- Bundle the ML Kit OCR model on install instead of downloading it later. -->
+        <!-- Ask Play services to download the Japanese/Chinese/Korean text models at install time. -->
         <meta-data
             android:name="com.google.mlkit.vision.DEPENDENCIES"
-            android:value="ocr" />
+            android:value="ocr,ocr_japanese,ocr_chinese,ocr_korean" />
     </application>
 </manifest>

@@ -43,7 +43,13 @@ sealed interface UploadState {
 
 sealed interface SearchState {
     data object Closed : SearchState
-    data class Open(val query: String = "", val loading: Boolean = false, val results: List<CardBrief> = emptyList(), val error: String? = null) : SearchState
+    data class Open(
+        val query: String = "",
+        val language: String = "en",
+        val loading: Boolean = false,
+        val results: List<CardBrief> = emptyList(),
+        val error: String? = null,
+    ) : SearchState
 }
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -145,7 +151,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // ------------------------------------------------------------ search
 
     fun openSearch() {
-        search = SearchState.Open(query = last?.text?.name.orEmpty())
+        search = SearchState.Open(
+            query = last?.text?.name.orEmpty(),
+            language = last?.card?.language ?: last?.text?.languages?.firstOrNull() ?: "en",
+        )
         if ((search as SearchState.Open).query.isNotBlank()) runSearch()
     }
 
@@ -156,13 +165,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         search = s.copy(query = q)
     }
 
+    fun updateSearchLanguage(lang: String) {
+        val s = search as? SearchState.Open ?: return
+        search = s.copy(language = lang, results = emptyList())
+        runSearch()
+    }
+
     fun runSearch() {
         val s = search as? SearchState.Open ?: return
         if (s.query.isBlank()) return
         search = s.copy(loading = true, error = null)
         viewModelScope.launch {
             search = try {
-                val results = analyzer.search(s.query)
+                val results = analyzer.search(s.query, s.language)
                 s.copy(loading = false, results = results, error = if (results.isEmpty()) "No cards named \"${s.query}\"." else null)
             } catch (e: Exception) {
                 s.copy(loading = false, error = "Search failed: ${e.message}")
@@ -177,7 +192,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         screen = Screen.Working("Loading ${brief.name}…")
         viewModelScope.launch {
             try {
-                show(analyzer.withCard(current, analyzer.getCard(brief.id)))
+                show(analyzer.withCard(current, analyzer.getCard(brief.id, brief.language)))
             } catch (e: Exception) {
                 show(current)
             }

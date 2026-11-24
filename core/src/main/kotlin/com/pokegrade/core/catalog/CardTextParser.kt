@@ -15,6 +15,8 @@ data class ParsedCardText(
     /** Printed set size from "025/198", if present. */
     val setTotal: String?,
     val allText: String,
+    /** TCGdex language codes to search, most likely first (e.g. ["ja"], ["de", "en"]). */
+    val languages: List<String> = listOf("en"),
 )
 
 /**
@@ -23,9 +25,10 @@ data class ParsedCardText(
 object CardTextParser {
     private val NUMBER = Regex("""\b([A-Z]{0,4}\d{1,3}[a-z]?)\s*/\s*([A-Z]{0,4}\d{1,3})\b""")
     private val PROMO = Regex("""\b(SWSH\d{3}|SM\d{2,3}|XY\d{2,3}|BW\d{2,3}|SVP?\s?\d{2,3}|HGSS\d{2})\b""")
-    private val HP_AFTER = Regex("""\bHP\s*(\d{2,3})\b""", RegexOption.IGNORE_CASE)
+    // HP is "KP" in German, "PV" in French, "PS" in Spanish/Italian/Portuguese.
+    private val HP_AFTER = Regex("""\b(?:HP|KP|PV|PS)\s*(\d{2,3})\b""", RegexOption.IGNORE_CASE)
     private val BARE_HP = Regex("""^(\d{2,3})$""")
-    private val HP_BEFORE = Regex("""\b(\d{2,3})\s*HP\b""", RegexOption.IGNORE_CASE)
+    private val HP_BEFORE = Regex("""\b(\d{2,3})\s*(?:HP|KP|PV|PS)\b""", RegexOption.IGNORE_CASE)
 
     /** Lines near the name that are never the name. */
     private val NOT_NAME = listOf(
@@ -34,11 +37,55 @@ object CardTextParser {
         "retreat", "tera", "rule", "pokémon ex rule", "pokemon ex rule",
     )
 
-    /** Stage text printed on the same line, before the name. */
+    /** Stage text printed on the same line, before the name (several languages). */
     private val STAGE_PREFIX = Regex(
-        """^(basic|stage\s*[12]|restored|break|v-union|vmax|vstar|level-up|baby)\b[\s:.\-]*""",
+        """^(basic|stage\s*[12]|restored|break|v-union|vmax|vstar|level-up|baby|""" +
+            // de / fr / es / it / pt / id
+            """basis|phase\s*[12]|de\s+base|base|niveau\s*[12]|b[áa]sico|fase\s*[12]|est[áa]gio\s*[12]|dasar|tahap\s*[12])\b[\s:.\-]*""" +
+            // ja / ko / zh: no word boundaries in these scripts
+            """|^(たね|[12１２]進化|기본|[12]진화|基礎|[12]階進化|[12]阶进化)[\s:.\-]*""",
         RegexOption.IGNORE_CASE,
     )
+
+    /** Words printed on every card, used to tell the language apart. */
+    private val LANGUAGE_WORDS = mapOf(
+        "en" to listOf("weakness", "resistance", "retreat", "ability", "evolves from", "illus"),
+        "fr" to listOf("faiblesse", "résistance", "retraite", "talent", "évolue de"),
+        "de" to listOf("schwäche", "resistenz", "rückzug", "fähigkeit", "entwickelt sich aus"),
+        "es" to listOf("debilidad", "resistencia", "retirada", "habilidad", "evoluciona de"),
+        "it" to listOf("debolezza", "resistenza", "ritirata", "abilità", "si evolve da"),
+        "pt" to listOf("fraqueza", "resistência", "recuo", "habilidade", "evolui de"),
+        "id" to listOf("kelemahan", "ketahanan", "mundur", "kemampuan"),
+    )
+
+    /** TCGdex language codes, most likely first. */
+    fun detectLanguages(text: String): List<String> {
+        val kana = text.count { Character.UnicodeBlock.of(it) in KANA }
+        val hangul = text.count { Character.UnicodeBlock.of(it) in HANGUL }
+        val han = text.count { Character.UnicodeScript.of(it.code) == Character.UnicodeScript.HAN }
+        val thai = text.count { Character.UnicodeScript.of(it.code) == Character.UnicodeScript.THAI }
+        return when {
+            kana >= 2 -> listOf("ja")
+            hangul >= 2 -> listOf("ko")
+            thai >= 2 -> listOf("th")
+            han >= 2 -> listOf("zh-tw", "zh-cn", "ja")
+            else -> {
+                val lower = text.lowercase()
+                val scores = LANGUAGE_WORDS.mapValues { (_, words) -> words.count { lower.contains(it) } }
+                val best = scores.filter { it.value > 0 }.entries.sortedByDescending { it.value }.map { it.key }
+                (best + "en").distinct()
+            }
+        }
+    }
+
+    private val KANA = setOf(Character.UnicodeBlock.HIRAGANA, Character.UnicodeBlock.KATAKANA, Character.UnicodeBlock.KATAKANA_PHONETIC_EXTENSIONS)
+    private val HANGUL = setOf(Character.UnicodeBlock.HANGUL_SYLLABLES, Character.UnicodeBlock.HANGUL_JAMO, Character.UnicodeBlock.HANGUL_COMPATIBILITY_JAMO)
+
+    private fun isCjk(s: String) = s.any {
+        val sc = Character.UnicodeScript.of(it.code)
+        sc == Character.UnicodeScript.HAN || sc == Character.UnicodeScript.HIRAGANA ||
+            sc == Character.UnicodeScript.KATAKANA || sc == Character.UnicodeScript.HANGUL
+    }
 
     /**
      * The stylised "ex" / "EX" / "GX" logo is often read as part of the
@@ -73,6 +120,7 @@ object CardTextParser {
             number = numberMatch?.groupValues?.get(1) ?: promo?.value?.replace(" ", ""),
             setTotal = numberMatch?.groupValues?.get(2),
             allText = all,
+            languages = detectLanguages(all),
         )
     }
 
@@ -81,7 +129,8 @@ object CardTextParser {
             .filter { it.top < 0.16 }
             .map { it to cleanName(it.text) }
             .filter { (_, n) ->
-                n.length >= 3 && n.count { it.isLetter() } >= 3 &&
+                // CJK names can be just two characters (e.g. 喵喵).
+                (if (isCjk(n)) n.count { it.isLetter() } >= 2 else n.length >= 3 && n.count { it.isLetter() } >= 3) &&
                     NOT_NAME.none { n.lowercase().startsWith(it) }
             }
         // The name is the tallest text in the header area.
@@ -122,7 +171,9 @@ object CardTextParser {
     fun nameQueries(name: String?): List<String> {
         if (name.isNullOrBlank()) return emptyList()
         val base = name.split(' ').first()
-        return listOf(name, base).distinct().filter { it.length >= 3 }
+        // "ピカチュウex" -> also try "ピカチュウ".
+        val noSuffix = base.replace(Regex("""(?<=[^\x00-\x7F])(ex|EX|GX|V|VMAX|VSTAR)$"""), "")
+        return listOf(name, base, noSuffix).distinct().filter { it.length >= (if (isCjk(it)) 2 else 3) }
     }
 
     /** "025" -> "25", "TG05" -> "TG05" (the API stores numbers without leading zeros). */

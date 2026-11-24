@@ -52,4 +52,36 @@ class TcgDexLiveTest {
         println(cards.map { "${it.id} ${it.name}" })
         assertTrue(cards.any { it.id == "xy7-7" })
     }
+
+    @Test
+    fun findsJapaneseCard() {
+        if (!live) return
+        val text = CardTextParser.parse(listOf(
+            OcrLine("たね ピカチュウ", 0.05, 0.03, 0.045),
+            OcrLine("HP60", 0.7, 0.04, 0.03),
+            OcrLine("025/165", 0.05, 0.95, 0.015),
+        ))
+        val cards = client.findCandidates(text)
+        println(cards.map { "${it.language} ${it.id} ${it.name} ${it.set.name} cm=${it.cardmarket?.prices?.trendPrice}" })
+        assertEquals("SV2a-025", cards.first().id)
+        assertEquals("ja", cards.first().language)
+        val price = PriceEstimator.estimate(cards.first(), 9.0)
+        println(price)
+        assertTrue(price.rawMarketUsd != null)
+    }
+
+    @Test
+    fun findsGermanCard() {
+        if (!live) return
+        val text = CardTextParser.parse(listOf(
+            OcrLine("Nachtara VMAX", 0.12, 0.04, 0.045),
+            OcrLine("KP310", 0.7, 0.04, 0.03),
+            OcrLine("Schwäche Resistenz Rückzug", 0.1, 0.85, 0.02),
+            OcrLine("215/203", 0.05, 0.95, 0.015),
+        ))
+        val cards = client.findCandidates(text)
+        println(cards.map { "${it.language} ${it.id} ${it.name} tcp=${it.tcgplayer?.prices?.keys}" })
+        assertEquals("swsh7-215", cards.first().id)
+        assertEquals("de", cards.first().language)
+    }
 }

@@ -91,7 +91,7 @@ class DatasetUploader(private val context: Context) {
                 "verified" to false,
             ),
             "card" to card?.let {
-                mapOf("id" to it.id, "name" to it.name, "set" to it.set.name, "number" to it.number, "rarity" to it.rarity)
+                mapOf("id" to it.id, "language" to it.language, "name" to it.name, "set" to it.set.name, "number" to it.number, "rarity" to it.rarity)
             },
             "ocr" to mapOf("name" to a.text.name, "hp" to a.text.hp, "number" to a.text.number, "setTotal" to a.text.setTotal),
             "grade" to toFirestore(json.encodeToJsonElement(GradeResult.serializer(), a.grade)),

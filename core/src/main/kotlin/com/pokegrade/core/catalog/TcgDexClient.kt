@@ -16,7 +16,7 @@ import java.net.URLEncoder
 
 /** A search hit before we fetch full details. */
 @Serializable
-data class CardBrief(val id: String, val name: String, val localId: String, val image: String?) {
+data class CardBrief(val id: String, val name: String, val localId: String, val image: String?, val language: String = "en") {
     val smallImage get() = image?.let { "$it/low.jpg" }
 }
 
@@ -25,24 +25,36 @@ data class CardBrief(val id: String, val name: String, val localId: String, val 
  * scans, and daily TCGplayer (USD) + Cardmarket (EUR) prices. No key needed.
  */
 class TcgDexClient(
-    private val baseUrl: String = "https://api.tcgdex.net/v2/en",
+    private val apiRoot: String = "https://api.tcgdex.net/v2",
     private val maxDetails: Int = 6,
 ) : CardCatalog {
+
+    private fun base(lang: String) = "$apiRoot/$lang"
 
     private val json = Json { ignoreUnknownKeys = true }
 
     override fun findCandidates(text: ParsedCardText): List<TcgCard> {
+        // Try the detected language first; European prints share English numbering,
+        // so English is a useful fallback for them.
+        for (lang in text.languages.ifEmpty { listOf("en") }.take(4)) {
+            val found = findIn(lang, text)
+            if (found.isNotEmpty()) return found
+        }
+        return emptyList()
+    }
+
+    private fun findIn(lang: String, text: ParsedCardText): List<TcgCard> {
         val number = text.number?.let(CardTextParser::normalizeNumber)
         val total = text.setTotal?.trimStart('0')?.toIntOrNull()
 
         val briefs = LinkedHashMap<String, CardBrief>()
         for (n in CardTextParser.nameQueries(text.name)) {
-            val hits = searchByName(n)
+            val hits = searchByName(n, lang)
             if (hits.isNotEmpty()) { hits.forEach { briefs[it.id] = it }; break }
         }
         if (number != null && total != null) {
             // TCGdex's localId filter is a "contains" match, so filter exactly here.
-            list("localId=${enc(number)}&set.cardCount.official=$total")
+            list(lang, "localId=${enc(number)}&set.cardCount.official=$total")
                 .filter { sameNumber(it.localId, number) }
                 .forEach { briefs[it.id] = it }
         }
@@ -54,25 +66,26 @@ class TcgDexClient(
                 (if (text.name != null && b.name.equals(text.name, true)) 1 else 0)
         }.take(maxDetails)
 
-        val cards = shortlist.mapNotNull { runCatching { getCard(it.id) }.getOrNull() }
+        val cards = shortlist.mapNotNull { runCatching { getCard(it.id, lang) }.getOrNull() }
         return CardRanker.rank(cards, text)
     }
 
-    override fun searchByName(name: String): List<CardBrief> =
-        if (name.isBlank()) emptyList() else list("name=${enc(name.trim())}")
+    override fun searchByName(name: String, language: String): List<CardBrief> =
+        if (name.isBlank()) emptyList() else list(language, "name=${enc(name.trim())}")
 
-    override fun getCard(id: String): TcgCard = parseCard(json.parseToJsonElement(get("$baseUrl/cards/${enc(id)}")).jsonObject)
+    override fun getCard(id: String, language: String): TcgCard =
+        parseCard(json.parseToJsonElement(get("${base(language)}/cards/${enc(id)}")).jsonObject, language)
 
-    private fun list(query: String): List<CardBrief> {
-        val arr = json.parseToJsonElement(get("$baseUrl/cards?$query"))
+    private fun list(lang: String, query: String): List<CardBrief> {
+        val arr = json.parseToJsonElement(get("${base(lang)}/cards?$query"))
         if (arr !is JsonArray) return emptyList()
         return arr.mapNotNull { e ->
             val o = e as? JsonObject ?: return@mapNotNull null
-            CardBrief(o.str("id") ?: return@mapNotNull null, o.str("name").orEmpty(), o.str("localId").orEmpty(), o.str("image"))
+            CardBrief(o.str("id") ?: return@mapNotNull null, o.str("name").orEmpty(), o.str("localId").orEmpty(), o.str("image"), lang)
         }
     }
 
-    internal fun parseCard(o: JsonObject): TcgCard {
+    internal fun parseCard(o: JsonObject, language: String = "en"): TcgCard {
         val set = o["set"]?.jsonObject
         val count = set?.get("cardCount") as? JsonObject
         val image = o.str("image")
@@ -93,6 +106,7 @@ class TcgDexClient(
 
         return TcgCard(
             id = o.str("id").orEmpty(),
+            language = language,
             name = o.str("name").orEmpty(),
             supertype = o.str("category"),
             subtypes = listOfNotNull(o.str("stage"), o.str("suffix")),
@@ -148,9 +162,16 @@ class TcgDexClient(
 /** Card lookup backend. */
 interface CardCatalog {
     fun findCandidates(text: ParsedCardText): List<TcgCard>
-    fun searchByName(name: String): List<CardBrief>
-    fun getCard(id: String): TcgCard
+    fun searchByName(name: String, language: String = "en"): List<CardBrief>
+    fun getCard(id: String, language: String = "en"): TcgCard
 }
+
+/** Languages TCGdex supports, with display names. */
+val CARD_LANGUAGES = linkedMapOf(
+    "en" to "English", "ja" to "Japanese", "fr" to "French", "de" to "German", "es" to "Spanish",
+    "it" to "Italian", "pt" to "Portuguese", "ko" to "Korean", "zh-tw" to "Chinese (Trad.)",
+    "zh-cn" to "Chinese (Simp.)", "id" to "Indonesian", "th" to "Thai",
+)
 
 object CardRanker {
     fun rank(cards: List<TcgCard>, text: ParsedCardText): List<TcgCard> =
