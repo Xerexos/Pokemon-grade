@@ -43,6 +43,7 @@ class CardGrader(private val config: Config = Config()) {
         val bounds = findCardBounds(img, notes)
         val cw = bounds.width.toDouble()
 
+        estimateBackground(img, bounds)
         val sides = measureBorders(img, bounds)
         val centering = Centering(
             leftRatio = sides.left.width / max(1.0, sides.left.width + sides.right.width),
@@ -83,6 +84,7 @@ class CardGrader(private val config: Config = Config()) {
         }
         if (surface > 0.03) notes += "Possible scratches, print lines or marks on the surface."
         notes += quality.problems
+        if (backgroundIsLight) notes += "Light background: whitening right at the edges can't be told apart from the table. A dark surface gives a more accurate grade."
 
         // Refuse to give a confident grade when the measurements can't be trusted.
         val issues = mutableListOf<String>()
@@ -233,7 +235,19 @@ class CardGrader(private val config: Config = Config()) {
 
     // --------------------------------------------------------------- borders
 
-    internal data class Side(val width: Double, val color: Int, val profile: List<Double>)
+    internal data class Side(
+        val width: Double,
+        val color: Int,
+        val profile: List<Double>,
+        /** Border colour in 12 segments along the side, to follow lighting gradients. */
+        val local: List<Int> = emptyList(),
+        /** Typical colour noise (90th percentile distance) in the clean border band. */
+        val noise: Double = 0.0,
+    ) {
+        /** Border colour near position t (0..1) along the side. */
+        fun refAt(t: Double): Int =
+            if (local.isEmpty()) color else local[(t * local.size).toInt().coerceIn(0, local.size - 1)]
+    }
     internal data class Sides(val left: Side, val right: Side, val top: Side, val bottom: Side) {
         val all get() = listOf(top, right, bottom, left)
     }
@@ -248,10 +262,30 @@ class CardGrader(private val config: Config = Config()) {
         val refTo = max(refFrom + 2, (cw * 0.024).roundToInt())
         val maxDepth = (cw * 0.2).roundToInt()
 
-        fun side(lines: Int, pixelAt: (line: Int, depth: Int) -> Int?): Side {
+        fun side(lines: Int, alongT: (t: Double, depth: Int) -> Int?, pixelAt: (line: Int, depth: Int) -> Int?): Side {
             val refSamples = ArrayList<Int>()
             for (l in 0 until lines) for (d in refFrom..refTo) pixelAt(l, d)?.let(refSamples::add)
             val ref = ColorMath.medianColor(refSamples)
+            // Local colour per segment (covers the whole side, corners included).
+            val segments = 12
+            val local = (0 until segments).map { seg ->
+                val samples = ArrayList<Int>()
+                var t = seg.toDouble() / segments
+                while (t < (seg + 1.0) / segments) {
+                    for (d in refFrom..refTo) alongT(t, d)?.let(samples::add)
+                    t += 0.005
+                }
+                if (samples.isEmpty()) ref else ColorMath.medianColor(samples)
+            }
+            // Noise: how far clean border pixels stray from their local colour.
+            val dists = ArrayList<Double>()
+            var tt = 0.1
+            while (tt <= 0.9) {
+                val lr = local[(tt * segments).toInt().coerceIn(0, segments - 1)]
+                for (d in refFrom..refTo) alongT(tt, d)?.let { dists += ColorMath.distance(it, lr) }
+                tt += 0.01
+            }
+            val noise = if (dists.isEmpty()) 0.0 else dists.sorted()[(dists.size * 0.9).toInt().coerceAtMost(dists.size - 1)]
             val widths = ArrayList<Double>()
             for (l in 0 until lines) {
                 var run = 0
@@ -267,28 +301,25 @@ class CardGrader(private val config: Config = Config()) {
             }
             val valid = widths.filter { !it.isNaN() }.sorted()
             val med = if (valid.isEmpty()) 0.0 else valid[valid.size / 2]
-            return Side(med, ref, widths)
+            return Side(med, ref, widths, local, noise)
         }
 
         val n = 48
         fun inRange(x: Int, y: Int) = x in 0 until img.width && y in 0 until img.height
         fun along(start: Int, len: Int, l: Int) = start + (len * (0.2 + 0.6 * l / (n - 1))).roundToInt()
 
-        val left = side(n) { l, d ->
-            val x = b.left + d; val y = along(b.top, b.height, l)
-            if (inRange(x, y)) img.argb(x, y) else null
+        fun px(x: Int, y: Int) = if (inRange(x, y)) img.argb(x, y) else null
+        val left = side(n, { t, d -> px(b.left + d, b.top + (b.height * t).toInt()) }) { l, d ->
+            px(b.left + d, along(b.top, b.height, l))
         }
-        val right = side(n) { l, d ->
-            val x = b.right - 1 - d; val y = along(b.top, b.height, l)
-            if (inRange(x, y)) img.argb(x, y) else null
+        val right = side(n, { t, d -> px(b.right - 1 - d, b.top + (b.height * t).toInt()) }) { l, d ->
+            px(b.right - 1 - d, along(b.top, b.height, l))
         }
-        val top = side(n) { l, d ->
-            val y = b.top + d; val x = along(b.left, b.width, l)
-            if (inRange(x, y)) img.argb(x, y) else null
+        val top = side(n, { t, d -> px(b.left + (b.width * t).toInt(), b.top + d) }) { l, d ->
+            px(along(b.left, b.width, l), b.top + d)
         }
-        val bottom = side(n) { l, d ->
-            val y = b.bottom - 1 - d; val x = along(b.left, b.width, l)
-            if (inRange(x, y)) img.argb(x, y) else null
+        val bottom = side(n, { t, d -> px(b.left + (b.width * t).toInt(), b.bottom - 1 - d) }) { l, d ->
+            px(along(b.left, b.width, l), b.bottom - 1 - d)
         }
         return Sides(left, right, top, bottom)
     }
@@ -302,12 +333,17 @@ class CardGrader(private val config: Config = Config()) {
         val margin = max(2.0, cw * 0.008)  // ignore the anti-aliased outline itself
         val patch = (cw * 0.09).roundToInt()
 
-        data class Corner(val x0: Int, val y0: Int, val sx: Int, val sy: Int, val ref: Int, val depthX: Double, val depthY: Double)
+        data class Corner(
+            val x0: Int, val y0: Int, val sx: Int, val sy: Int, val ref: Int,
+            val depthX: Double, val depthY: Double, val thr: Double,
+        )
+        // Reference colour from the border segments next to each corner.
+        fun cornerThr(a: Side, c: Side) = max(threshold(a), threshold(c))
         val corners = listOf(
-            Corner(b.left, b.top, 1, 1, mix(s.left.color, s.top.color), s.left.width, s.top.width),
-            Corner(b.right - 1, b.top, -1, 1, mix(s.right.color, s.top.color), s.right.width, s.top.width),
-            Corner(b.left, b.bottom - 1, 1, -1, mix(s.left.color, s.bottom.color), s.left.width, s.bottom.width),
-            Corner(b.right - 1, b.bottom - 1, -1, -1, mix(s.right.color, s.bottom.color), s.right.width, s.bottom.width),
+            Corner(b.left, b.top, 1, 1, mix(s.left.refAt(0.04), s.top.refAt(0.04)), s.left.width, s.top.width, cornerThr(s.left, s.top)),
+            Corner(b.right - 1, b.top, -1, 1, mix(s.right.refAt(0.04), s.top.refAt(0.96)), s.right.width, s.top.width, cornerThr(s.right, s.top)),
+            Corner(b.left, b.bottom - 1, 1, -1, mix(s.left.refAt(0.96), s.bottom.refAt(0.04)), s.left.width, s.bottom.width, cornerThr(s.left, s.bottom)),
+            Corner(b.right - 1, b.bottom - 1, -1, -1, mix(s.right.refAt(0.96), s.bottom.refAt(0.96)), s.right.width, s.bottom.width, cornerThr(s.right, s.bottom)),
         )
         return corners.map { c ->
             var worn = 0; var total = 0
@@ -322,11 +358,13 @@ class CardGrader(private val config: Config = Config()) {
                 if (inside < 1.0) continue
                 // Only look at the printed border, not the artwork.
                 if (dx > bandX && dy > bandY) continue
-                total++
                 val p = img.argb(x, y)
                 // Right at the outline the background bleeds in, so only
                 // whitening counts there; further in, any big change does.
-                if (if (inside < margin) isWhitening(p, c.ref) else isWear(p, c.ref)) worn++
+                val nearOutline = inside < margin * 2
+                if (nearOutline && looksLikeBackground(p)) continue
+                total++
+                if (if (inside < margin) isWhitening(p, c.ref, c.thr) else isWear(p, c.ref, c.thr)) worn++
             }
             if (total == 0) 0.0 else worn.toDouble() / total
         }
@@ -350,15 +388,42 @@ class CardGrader(private val config: Config = Config()) {
      * either lighter (whitening, the most common flaw) or a big shift
      * (chip / exposed background / dirt).
      */
-    private fun isWear(p: Int, ref: Int): Boolean {
+    private fun isWear(p: Int, ref: Int, thr: Double = config.wearThreshold): Boolean {
         val d = ColorMath.distance(p, ref)
-        if (d < config.wearThreshold) return false
-        return isWhitening(p, ref) || d > config.wearThreshold * 1.8
+        if (d < thr) return false
+        return isWhitening(p, ref, thr) || d > thr * 1.8
+    }
+
+    /** Wear threshold for a side: higher when the photo itself is noisy (grain, foil, uneven light). */
+    private fun threshold(side: Side) = max(config.wearThreshold, side.noise * 2.0)
+
+    /** Colour just outside the card, or null if the card fills the photo. */
+    private var background: Int? = null
+    private val backgroundIsLight: Boolean
+        get() = background?.let { val h = ColorMath.hsv(it); h[2] > 0.62 && h[1] < 0.3 } ?: false
+
+    /** Near the outline on a light table, a pale pixel may just be the table. */
+    private fun looksLikeBackground(p: Int) =
+        backgroundIsLight && background?.let { ColorMath.distance(p, it) < 70 } == true
+
+    private fun estimateBackground(img: RgbImage, b: CardBounds) {
+        val samples = ArrayList<Int>()
+        for (d in 4..10) {
+            var t = 0.1
+            while (t <= 0.9) {
+                val x = b.left + (b.width * t).toInt(); val y = b.top + (b.height * t).toInt()
+                listOf(x to b.top - d, x to b.bottom - 1 + d, b.left - d to y, b.right - 1 + d to y).forEach { (px, py) ->
+                    if (px in 0 until img.width && py in 0 until img.height) samples += img.argb(px, py)
+                }
+                t += 0.05
+            }
+        }
+        background = if (samples.size > 40) ColorMath.medianColor(samples) else null
     }
 
     /** Paler than the border: lost colour without getting darker (or got clearly lighter). */
-    private fun isWhitening(p: Int, ref: Int): Boolean {
-        if (ColorMath.distance(p, ref) < config.wearThreshold) return false
+    private fun isWhitening(p: Int, ref: Int, thr: Double = config.wearThreshold): Boolean {
+        if (ColorMath.distance(p, ref) < thr) return false
         val hp = ColorMath.hsv(p)
         val hr = ColorMath.hsv(ref)
         val washedOut = hr[1] > 0.3 && hp[1] < hr[1] * 0.6 && hp[2] >= hr[2] - 0.08
@@ -381,9 +446,12 @@ class CardGrader(private val config: Config = Config()) {
                 for (d in 1 until min(margin + band, max(margin + 1, (side.width * 0.8).toInt()))) {
                     val (x, y) = sample(t, d)
                     if (x !in 0 until img.width || y !in 0 until img.height) continue
-                    total++
                     val p = img.argb(x, y)
-                    if (if (d < margin) isWhitening(p, side.color) else isWear(p, side.color)) worn++
+                    if (d < margin * 2 && looksLikeBackground(p)) continue
+                    total++
+                    val ref = side.refAt(t)
+                    val thr = threshold(side)
+                    if (if (d < margin) isWhitening(p, ref, thr) else isWear(p, ref, thr)) worn++
                 }
                 t += 0.004
             }
@@ -423,18 +491,28 @@ class CardGrader(private val config: Config = Config()) {
         fun scan(side: Side, sample: (along: Double, depth: Int) -> Pair<Int, Int>) {
             val maxD = (side.width * 0.8).toInt()
             if (maxD <= inset) return
+            // Collect colour distance and sharpness for the whole band, then judge
+            // against this photo's own noise level so camera grain isn't a "scratch".
+            val dists = ArrayList<Double>()
+            val laps = ArrayList<Double>()
             var t = 0.12
             while (t <= 0.88) {
                 for (d in inset until maxD) {
                     val (x, y) = sample(t, d)
                     if (x !in 1 until img.width - 1 || y !in 1 until img.height - 1) continue
-                    total++
-                    val p = img.argb(x, y)
-                    val lap = abs(4 * img.luma(x, y) - img.luma(x - 1, y) - img.luma(x + 1, y) -
+                    dists += ColorMath.distance(img.argb(x, y), side.refAt(t))
+                    laps += abs(4 * img.luma(x, y) - img.luma(x - 1, y) - img.luma(x + 1, y) -
                         img.luma(x, y - 1) - img.luma(x, y + 1))
-                    if (ColorMath.distance(p, side.color) > config.surfaceThreshold || lap > 40) bad++
                 }
                 t += 0.004
+            }
+            if (laps.isEmpty()) return
+            val lapNoise = laps.sorted()[(laps.size * 0.75).toInt()]
+            val lapThr = max(40.0, lapNoise * 2.5)
+            val distThr = max(config.surfaceThreshold, side.noise * 2.2)
+            for (i in laps.indices) {
+                total++
+                if (dists[i] > distThr || laps[i] > lapThr) bad++
             }
         }
         scan(s.top) { t, d -> (b.left + (b.width * t).toInt()) to (b.top + d) }

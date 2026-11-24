@@ -46,7 +46,7 @@ object CardTextParser {
             // de / fr / es / it / pt / id
             """basis|phase\s*[12]|de\s+base|base|niveau\s*[12]|b[áa]sico|fase\s*[12]|est[áa]gio\s*[12]|dasar|tahap\s*[12])\b[\s:.\-]*""" +
             // ja / ko / zh: no word boundaries in these scripts
-            """|^(たね|[12１２]進化|기본|[12]진화|基礎|[12]階進化|[12]阶进化)[\s:.\-]*""",
+            """|^(たね|[12１２]進化|기본|[12]진화|基礎|基础|[12]階進化|[12]阶进化)[\s:.\-]*""",
         RegexOption.IGNORE_CASE,
     )
 

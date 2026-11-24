@@ -164,6 +164,7 @@ class CatalogAndAuthTest {
         assertEquals("025", t.number)
         assertEquals(listOf("ja"), t.languages)
         assertEquals("ピカチュウ", CardTextParser.cleanName("たね ピカチュウ"))
+        assertEquals("洗翠卡蒂狗", CardTextParser.cleanName("基础 洗翠卡蒂狗"))
         assertEquals(listOf("ピカチュウex", "ピカチュウ"), CardTextParser.nameQueries("ピカチュウex"))
         assertEquals("Nachtara VMAX", CardTextParser.cleanName("BASIS Nachtara VMAX"))
         assertEquals(310, CardTextParser.parse(listOf(OcrLine("Nachtara VMAX KP310", 0.1, 0.04, 0.04))).hp)

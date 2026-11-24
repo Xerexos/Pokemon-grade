@@ -22,13 +22,17 @@ object SyntheticCard {
         whiteEdge: Boolean = false,
         scratches: Int = 0,
         seed: Int = 1,
+        table: Int = TABLE,
+        /** Brightness change across the card, e.g. 0.25 = 25% darker on one side. */
+        gradient: Double = 0.0,
+        noise: Int = 4,
     ): RgbImage {
         val cardH = (cardW * 88.0 / 63.0).toInt()
         val pad = 80
         val w = cardW + pad * 2
         val h = cardH + pad * 2
         val rnd = Random(seed)
-        val px = IntArray(w * h) { TABLE }
+        val px = IntArray(w * h) { table }
         val radius = cardW * 0.048
         for (y in 0 until cardH) for (x in 0 until cardW) {
             // Rounded corners.
@@ -44,14 +48,15 @@ object SyntheticCard {
                 val b = (150 + 90 * kotlin.math.sin((x + y) / 23.0)).toInt().coerceIn(0, 255)
                 RgbImage.rgb(r, g, b)
             }
-            px[(y + pad) * w + (x + pad)] = jitter(c, rnd)
+            val shade = 1.0 - gradient * (x.toDouble() / cardW)
+            px[(y + pad) * w + (x + pad)] = jitter(scale(c, shade), rnd, noise)
         }
         // Corner whitening: white wedge in each corner.
         if (whiteCorners > 0) {
             for (y in 0 until whiteCorners) for (x in 0 until whiteCorners - y) {
                 for ((cx, cy) in listOf(x to y, cardW - 1 - x to y, x to cardH - 1 - y, cardW - 1 - x to cardH - 1 - y)) {
                     val i = (cy + pad) * w + (cx + pad)
-                    if (px[i] != TABLE) px[i] = WHITE
+                    if (px[i] != table) px[i] = WHITE
                 }
             }
         }
@@ -67,8 +72,14 @@ object SyntheticCard {
         return RgbImage(w, h, px)
     }
 
-    private fun jitter(c: Int, rnd: Random): Int {
-        fun ch(v: Int) = (v + rnd.nextInt(-4, 5)).coerceIn(0, 255)
+    private fun scale(c: Int, k: Double) = RgbImage.rgb(
+        (((c shr 16) and 0xFF) * k).toInt().coerceIn(0, 255),
+        (((c shr 8) and 0xFF) * k).toInt().coerceIn(0, 255),
+        ((c and 0xFF) * k).toInt().coerceIn(0, 255),
+    )
+
+    private fun jitter(c: Int, rnd: Random, n: Int = 4): Int {
+        fun ch(v: Int) = (v + rnd.nextInt(-n, n + 1)).coerceIn(0, 255)
         return RgbImage.rgb(ch((c shr 16) and 0xFF), ch((c shr 8) and 0xFF), ch(c and 0xFF))
     }
 }
@@ -164,6 +175,34 @@ class CardGraderTest {
         val r = grader.grade(SyntheticCard.draw(scratches = 4))
         println("scratched: ${r.overall} ${r.subGrades} surface=${r.surfaceDefectRatio}")
         assertTrue(r.subGrades.surface < 9.5, "surface ${r.subGrades.surface}")
+    }
+}
+
+class RealWorldPhotoTest {
+    private val grader = CardGrader()
+
+    @Test
+    fun cleanCardUnderUnevenLightStillGradesWell() {
+        val r = grader.grade(SyntheticCard.draw(gradient = 0.3, noise = 12))
+        println("uneven light: ${r.overall} ${r.subGrades} reliable=${r.reliable} corners=${r.cornerWear} edges=${r.edgeWear}")
+        assertTrue(r.reliable)
+        assertTrue(r.overall >= 8.5, "overall ${r.overall}")
+    }
+
+    @Test
+    fun cleanCardOnLightTableIsNotWhitened() {
+        val r = grader.grade(SyntheticCard.draw(table = RgbImage.rgb(225, 222, 215)))
+        println("light table: ${r.overall} ${r.subGrades} reliable=${r.reliable} notes=${r.notes}")
+        assertTrue(r.subGrades.corners >= 8.5 && r.subGrades.edges >= 8.5, "${r.subGrades}")
+        assertTrue(r.notes.any { it.startsWith("Light background") })
+    }
+
+    @Test
+    fun wornCornersStillDetectedUnderUnevenLight() {
+        val clean = grader.grade(SyntheticCard.draw(gradient = 0.3, noise = 12))
+        val worn = grader.grade(SyntheticCard.draw(gradient = 0.3, noise = 12, whiteCorners = 34))
+        println("worn+uneven: ${worn.subGrades} vs clean ${clean.subGrades}")
+        assertTrue(worn.subGrades.corners < clean.subGrades.corners - 1.0)
     }
 }
 

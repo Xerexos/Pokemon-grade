@@ -83,11 +83,11 @@ dependencies {
 
     // On-device text recognition (reads card name, HP and number).
     implementation("com.google.mlkit:text-recognition:16.0.1")
-    // Japanese, Chinese and Korean text. These use Google Play services and download
-    // their models after install, so they barely add to the APK size.
-    implementation("com.google.android.gms:play-services-mlkit-text-recognition-japanese:16.0.1")
-    implementation("com.google.android.gms:play-services-mlkit-text-recognition-chinese:16.0.1")
-    implementation("com.google.android.gms:play-services-mlkit-text-recognition-korean:16.0.1")
+    // Japanese, Chinese and Korean text, built into the app so they work offline
+    // right after install (the Play-services versions download later and can fail silently).
+    implementation("com.google.mlkit:text-recognition-japanese:16.0.1")
+    implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
+    implementation("com.google.mlkit:text-recognition-korean:16.0.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.9.0")
 
