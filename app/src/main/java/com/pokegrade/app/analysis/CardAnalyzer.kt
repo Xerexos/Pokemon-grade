@@ -242,15 +242,52 @@ class CardAnalyzer(private val catalog: CardCatalog = TcgDexClient()) {
         val zh = zhJob.await()
         val ko = koJob.await()
 
-        val best = when {
-            ja != null && kanaCount(ja) >= 2 -> ja
-            ko != null && hangulCount(ko) >= 2 -> ko
-            zh != null && cjkCount(zh) >= 2 -> zh
-            ja != null && cjkCount(ja) >= 2 -> ja
-            else -> latinLines
+        val readers = linkedMapOf("latin" to latinLines)
+        ja?.let { readers["ja"] = it }
+        zh?.let { readers["zh"] = it }
+        ko?.let { readers["ko"] = it }
+        var text = CardTextParser.combine(readers)
+
+        // Names on foil cards are small, low-contrast text. If an Asian card's name
+        // wasn't read, read the name strip again, contrast-boosted and enlarged.
+        val asianScript = cjkCount(readers.values.flatten()) + hangulCount(readers.values.flatten()) >= 2
+        if (asianScript && (text.name == null || text.name!!.none { Character.isIdeographic(it.code) || it.code in 0x3040..0x30FF || it.code in 0xAC00..0xD7AF })) {
+            val strip = headerStrip(card)
+            val sImg = InputImage.fromBitmap(strip, 0)
+            val extra = listOfNotNull(
+                recognize(chinese, sImg, strip)?.let { "zh" to it },
+                recognize(japanese, sImg, strip)?.let { "ja" to it },
+                recognize(korean, sImg, strip)?.let { "ko" to it },
+            )
+            if (extra.isNotEmpty()) {
+                // Map strip coordinates back onto the card (the strip is its top 18%).
+                val merged = LinkedHashMap(readers)
+                for ((k, lines) in extra) {
+                    merged[k] = lines.map { it.copy(top = it.top * HEADER, height = it.height * HEADER) } + readers[k].orEmpty()
+                }
+                text = CardTextParser.combine(merged)
+            }
         }
         // Labels are English even on Asian cards, so check the Latin lines for one too.
-        CardTextParser.parse(best) to (latinLines + best).distinct()
+        text to readers.values.flatten().distinct()
+    }
+
+    /** Top of the card (name + HP), grayscale, contrast-stretched and enlarged for OCR. */
+    private fun headerStrip(card: Bitmap): Bitmap {
+        val h = (card.height * HEADER).toInt().coerceAtLeast(1)
+        val strip = crop(card, 0, 0, card.width, h).toRgbImage()
+        val luma = strip.lumaArray()
+        val sorted = luma.sorted()
+        val lo = sorted[(sorted.size * 0.03).toInt()]
+        val hi = sorted[(sorted.size * 0.97).toInt().coerceAtMost(sorted.size - 1)]
+        val range = (hi - lo).coerceAtLeast(1.0)
+        val px = IntArray(luma.size) { i ->
+            val v = ((luma[i] - lo) / range * 255).toInt().coerceIn(0, 255)
+            RgbImage.rgb(v, v, v)
+        }
+        val boosted = RgbImage(strip.width, strip.height, px).toBitmap()
+        val scale = (1600.0 / boosted.width).coerceIn(1.0, 2.5)
+        return Bitmap.createScaledBitmap(boosted, (boosted.width * scale).toInt(), (boosted.height * scale).toInt(), true)
     }
 
     private fun kanaCount(lines: List<OcrLine>) = lines.sumOf { l ->
@@ -299,6 +336,8 @@ class CardAnalyzer(private val catalog: CardCatalog = TcgDexClient()) {
 
     companion object {
         private const val GRADER_SIZE = 1200 // CardGrader.Config.workingSize
+        /** Share of the card height that holds the name and HP. */
+        private const val HEADER = 0.18
         private val ASIAN_BACKS = setOf("ja", "ko", "zh-tw", "zh-cn", "th", "id")
 
         fun downscale(bmp: Bitmap, longSide: Int): Bitmap {

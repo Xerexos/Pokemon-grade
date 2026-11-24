@@ -192,6 +192,38 @@ object CardTextParser {
         return out.joinToString(" ").replace("©x", "ex")
     }
 
+    /**
+     * Combine what several OCR readers saw ("latin", "ja", "zh", "ko"). Each is
+     * good at different things: the Latin reader gets numbers and English text,
+     * the Asian readers get names in their script. Take the name from the reader
+     * that matches the card's script and the numbers from whichever read them.
+     */
+    fun combine(readers: Map<String, List<OcrLine>>): ParsedCardText {
+        val parsed = readers.mapValues { parse(it.value) }
+        val allText = readers.values.flatten().joinToString("\n") { it.text }
+        val languages = detectLanguages(allText)
+        val order = when (languages.first()) {
+            "ja" -> listOf("ja", "zh", "ko", "latin")
+            "ko" -> listOf("ko", "ja", "zh", "latin")
+            "zh-cn", "zh-tw" -> listOf("zh", "ja", "ko", "latin")
+            else -> listOf("latin", "ja", "zh", "ko")
+        }
+        val asian = languages.first() in setOf("ja", "ko", "zh-cn", "zh-tw", "th")
+        // For Asian cards, a name in Latin letters is a misread; prefer a CJK one.
+        val name = order.firstNotNullOfOrNull { r -> parsed[r]?.name?.takeIf { !asian || isCjk(it) } }
+            ?: order.firstNotNullOfOrNull { parsed[it]?.name }
+        val numberFrom = (listOf("latin") + order).distinct()
+        val withNumber = numberFrom.firstNotNullOfOrNull { r -> parsed[r]?.takeIf { it.number != null } }
+        return ParsedCardText(
+            name = name,
+            hp = numberFrom.firstNotNullOfOrNull { parsed[it]?.hp },
+            number = withNumber?.number,
+            setTotal = withNumber?.setTotal,
+            allText = allText,
+            languages = languages,
+        )
+    }
+
     /** Names to search for, most specific first: "Genesect ex", then "Genesect". */
     fun nameQueries(name: String?): List<String> {
         if (name.isNullOrBlank()) return emptyList()

@@ -104,6 +104,7 @@ fun ResultScreen(a: Analysis, vm: MainViewModel) {
         PriceCard(a, vm)
         AiCard(vm)
         if (vm.dataset.available && vm.shareScans) LabelCard(vm, a.slab)
+        OcrDebug(a)
         Button(onClick = vm::scanAnother, modifier = Modifier.fillMaxWidth()) {
             Icon(Icons.Default.CameraAlt, null); Spacer(Modifier.width(8.dp)); Text("Scan another card")
         }
@@ -386,6 +387,22 @@ private fun PriceCard(a: Analysis, vm: MainViewModel) {
         }
         Text("Compare recent sales:", style = MaterialTheme.typography.labelMedium)
         MarketplaceLinks(a)
+    }
+}
+
+/** What the text readers saw, for troubleshooting misreads. */
+@Composable
+private fun OcrDebug(a: Analysis) {
+    var open by remember { mutableStateOf(false) }
+    TextButton(onClick = { open = !open }) { Text(if (open) "Hide text the app read" else "Show text the app read") }
+    if (open) {
+        Text(
+            "Name: ${a.text.name ?: "—"} · HP: ${a.text.hp ?: "—"} · Number: ${a.text.number ?: "—"}/${a.text.setTotal ?: "—"} · " +
+                "Language: ${a.text.languages.joinToString()}",
+            style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold,
+        )
+        Text(a.text.allText.lines().distinct().joinToString(" | "), style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

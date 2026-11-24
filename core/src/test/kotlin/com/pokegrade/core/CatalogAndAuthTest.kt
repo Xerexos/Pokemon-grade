@@ -185,4 +185,21 @@ class CatalogAndAuthTest {
         assertEquals(80, t.hp)
         assertEquals("zh-cn", t.languages.first())
     }
+
+    @Test
+    fun combinesReaders() {
+        val text = CardTextParser.combine(linkedMapOf(
+            // The Latin reader gets the number but garbles the name.
+            "latin" to listOf(OcrLine("Rit dn", 0.18, 0.035, 0.03), OcrLine("020/107", 0.15, 0.96, 0.012)),
+            // The Japanese reader misreads the HP as "w80円" and misses the name.
+            "ja" to listOf(OcrLine("w80円", 0.74, 0.03, 0.045)),
+            // The Chinese reader gets the name.
+            "zh" to listOf(OcrLine("洗翠 卡蒂狗", 0.18, 0.035, 0.03), OcrLine("烧光", 0.38, 0.58, 0.02)),
+        ))
+        assertEquals("洗翠 卡蒂狗", text.name)
+        assertEquals("020", text.number)
+        assertEquals("107", text.setTotal)
+        assertEquals(80, text.hp)
+        assertEquals("zh-cn", text.languages.first())
+    }
 }
