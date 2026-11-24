@@ -29,6 +29,10 @@ import com.pokegrade.core.catalog.TcgCard
 import com.pokegrade.core.catalog.TcgDexClient
 import com.pokegrade.core.grading.CardGrader
 import com.pokegrade.core.grading.GradeResult
+import com.pokegrade.core.grading.SlabLabel
+import com.pokegrade.core.grading.SlabLabelParser
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import com.pokegrade.core.image.RgbImage
 import com.pokegrade.core.pricing.PriceEstimate
 import com.pokegrade.core.pricing.PriceEstimator
@@ -57,6 +61,8 @@ data class Analysis(
     val price: PriceEstimate?,
     val lookupError: String? = null,
     val back: BackScan? = null,
+    /** Set when the card is in a graded slab and we could read the label. */
+    val slab: SlabLabel? = null,
 )
 
 /**
@@ -74,17 +80,24 @@ class CardAnalyzer(private val catalog: CardCatalog = TcgDexClient()) {
     private val referenceCache = HashMap<String, RgbImage?>()
 
     suspend fun analyze(photo: Bitmap, onProgress: (String) -> Unit): Analysis {
-        onProgress("Measuring centering, corners, edges and surface…")
         // Downscale to the grader's working size so its bounds map 1:1 onto this bitmap.
         val working = withContext(Dispatchers.Default) { downscale(photo, GRADER_SIZE) }
-        val grade = withContext(Dispatchers.Default) { grader.grade(working.toRgbImage()) }
+
+        // Is it in a graded slab? Read the label and only measure the card below it.
+        onProgress("Looking for a slab label…")
+        val slab = recognize(latin, InputImage.fromBitmap(working, 0), working)?.let(SlabLabelParser::parse)
+        val offsetY = if (slab != null) ((slab.labelBottom + 0.01) * working.height).toInt().coerceIn(0, working.height / 2) else 0
+        val area = if (offsetY > 0) crop(working, 0, offsetY, working.width, working.height - offsetY) else working
+
+        onProgress("Measuring centering, corners, edges and surface…")
+        val grade = withContext(Dispatchers.Default) { grader.grade(area.toRgbImage()) }
         // Bounds are in the working image; crop the card from the full-resolution photo
         // (capped at 2000 px) so text reading, the AI check and uploads get the detail.
         val k = photo.width.toDouble() / working.width
         val cardBitmap = downscale(
             crop(
                 photo,
-                (grade.bounds.left * k).toInt(), (grade.bounds.top * k).toInt(),
+                (grade.bounds.left * k).toInt(), ((grade.bounds.top + offsetY) * k).toInt(),
                 (grade.bounds.width * k).toInt(), (grade.bounds.height * k).toInt(),
             ),
             2000,
@@ -106,13 +119,13 @@ class CardAnalyzer(private val catalog: CardCatalog = TcgDexClient()) {
             onProgress("Comparing with official cards…")
             pickByPhoto(cardBitmap, ranked, text)
         } else ranked
-        return finish(cardBitmap, grade, text, candidates, candidates.firstOrNull(), lookupError, null, onProgress)
+        return finish(cardBitmap, grade, text, candidates, candidates.firstOrNull(), lookupError, null, onProgress).copy(slab = slab)
     }
 
     /** Re-run authenticity and price for a different database match chosen by the user. */
     suspend fun withCard(a: Analysis, card: TcgCard, onProgress: (String) -> Unit = {}): Analysis {
         val candidates = if (a.candidates.any { it.id == card.id }) a.candidates else listOf(card) + a.candidates
-        return finish(a.cardBitmap, a.grade, a.text, candidates, card, null, a.back, onProgress)
+        return finish(a.cardBitmap, a.grade, a.text, candidates, card, null, a.back, onProgress).copy(slab = a.slab)
     }
 
     suspend fun search(name: String, language: String): List<CardBrief> =
@@ -134,7 +147,7 @@ class CardAnalyzer(private val catalog: CardCatalog = TcgDexClient()) {
             }
             BackScan(located.card.toBitmap(), features, checks, located.outlineOk)
         }
-        return finish(a.cardBitmap, a.grade, a.text, a.candidates, a.card, a.lookupError, back) {}
+        return finish(a.cardBitmap, a.grade, a.text, a.candidates, a.card, a.lookupError, back) {}.copy(slab = a.slab)
     }
 
     private suspend fun finish(
@@ -193,29 +206,34 @@ class CardAnalyzer(private val catalog: CardCatalog = TcgDexClient()) {
      * model. Those models download through Play services on first use; if one
      * isn't ready yet we just fall back to what we have.
      */
-    private suspend fun readText(card: Bitmap): ParsedCardText {
+    private suspend fun readText(card: Bitmap): ParsedCardText = coroutineScope {
         val image = InputImage.fromBitmap(card, 0)
-        val latinLines = recognize(latin, image, card) ?: emptyList()
-        val latinText = latinLines.joinToString(" ") { it.text }
-        val latinLetters = latinText.count { it.isLetter() }
+        // Run every script's reader: English text on a card (or label) mustn't
+        // hide Asian text. Each also reads Latin, so the richest result wins.
+        val latinJob = async { recognize(latin, image, card) }
+        val jaJob = async { recognize(japanese, image, card) }
+        val zhJob = async { recognize(chinese, image, card) }
+        val koJob = async { recognize(korean, image, card) }
+        val latinLines = latinJob.await() ?: emptyList()
+        val ja = jaJob.await()
+        val zh = zhJob.await()
+        val ko = koJob.await()
 
-        var best = latinLines
-        if (latinLetters < 40 || CardTextParser.detectLanguages(latinText).first() != "en" && latinLetters < 80) {
-            // Japanese model also reads Latin text, so it's a safe second opinion.
-            val ja = recognize(japanese, image, card)
-            if (ja != null && cjkCount(ja) >= 2) {
-                best = ja
-                val jaText = ja.joinToString(" ") { it.text }
-                val hasKana = CardTextParser.detectLanguages(jaText).first() == "ja"
-                if (!hasKana) {
-                    // Kanji without kana is probably Chinese.
-                    recognize(chinese, image, card)?.takeIf { cjkCount(it) >= cjkCount(ja) }?.let { best = it }
-                }
-            } else {
-                recognize(korean, image, card)?.takeIf { hangulCount(it) >= 2 }?.let { best = it }
-            }
+        val best = when {
+            ja != null && kanaCount(ja) >= 2 -> ja
+            ko != null && hangulCount(ko) >= 2 -> ko
+            zh != null && cjkCount(zh) >= 2 -> zh
+            ja != null && cjkCount(ja) >= 2 -> ja
+            else -> latinLines
         }
-        return CardTextParser.parse(best)
+        CardTextParser.parse(best)
+    }
+
+    private fun kanaCount(lines: List<OcrLine>) = lines.sumOf { l ->
+        l.text.count {
+            val sc = Character.UnicodeScript.of(it.code)
+            sc == Character.UnicodeScript.HIRAGANA || sc == Character.UnicodeScript.KATAKANA
+        }
     }
 
     private suspend fun recognize(r: TextRecognizer, image: InputImage, card: Bitmap): List<OcrLine>? = try {

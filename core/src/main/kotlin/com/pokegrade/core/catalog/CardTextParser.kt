@@ -68,7 +68,12 @@ object CardTextParser {
             kana >= 2 -> listOf("ja")
             hangul >= 2 -> listOf("ko")
             thai >= 2 -> listOf("th")
-            han >= 2 -> listOf("zh-tw", "zh-cn", "ja")
+            han >= 2 -> {
+                // Simplified (mainland) vs Traditional (Taiwan/HK) Chinese.
+                val simplified = text.count { it in SIMPLIFIED }
+                val traditional = text.count { it in TRADITIONAL }
+                if (simplified > traditional) listOf("zh-cn", "zh-tw", "ja") else listOf("zh-tw", "zh-cn", "ja")
+            }
             else -> {
                 val lower = text.lowercase()
                 val scores = LANGUAGE_WORDS.mapValues { (_, words) -> words.count { lower.contains(it) } }
@@ -77,6 +82,10 @@ object CardTextParser {
             }
         }
     }
+
+    /** Common card-text characters that differ between Simplified and Traditional Chinese. */
+    private const val SIMPLIFIED = "龙击发进阶伤对战场宝梦为从张个时将后气种连选这们备给让该战点损态"
+    private const val TRADITIONAL = "龍擊發進階傷對戰場寶夢為從張個時將後氣種連選這們備給讓該戰點損態"
 
     private val KANA = setOf(Character.UnicodeBlock.HIRAGANA, Character.UnicodeBlock.KATAKANA, Character.UnicodeBlock.KATAKANA_PHONETIC_EXTENSIONS)
     private val HANGUL = setOf(Character.UnicodeBlock.HANGUL_SYLLABLES, Character.UnicodeBlock.HANGUL_JAMO, Character.UnicodeBlock.HANGUL_COMPATIBILITY_JAMO)

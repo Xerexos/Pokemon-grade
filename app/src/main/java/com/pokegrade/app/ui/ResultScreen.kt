@@ -71,6 +71,7 @@ import com.pokegrade.app.SearchState
 import com.pokegrade.core.catalog.CARD_LANGUAGES
 import com.pokegrade.core.grading.Grader
 import com.pokegrade.core.grading.GraderScales
+import com.pokegrade.core.grading.SlabLabel
 import com.pokegrade.app.UploadState
 import com.pokegrade.app.data.LabelType
 import com.pokegrade.app.data.ScanLabel
@@ -96,11 +97,12 @@ fun ResultScreen(a: Analysis, vm: MainViewModel) {
         }
         Header(a, vm)
         SearchDialog(vm)
-        GradeCard(a.grade)
+        a.slab?.let { SlabCard(it) }
+        GradeCard(a.grade, inSlab = a.slab != null)
         AuthenticityCard(a, vm)
         PriceCard(a, vm)
         AiCard(vm)
-        if (vm.dataset.available && vm.shareScans) LabelCard(vm)
+        if (vm.dataset.available && vm.shareScans) LabelCard(vm, a.slab)
         Button(onClick = vm::scanAnother, modifier = Modifier.fillMaxWidth()) {
             Icon(Icons.Default.CameraAlt, null); Spacer(Modifier.width(8.dp)); Text("Scan another card")
         }
@@ -164,8 +166,8 @@ private fun Header(a: Analysis, vm: MainViewModel) {
 }
 
 @Composable
-private fun GradeCard(g: GradeResult) {
-    Section("Condition grade") {
+private fun GradeCard(g: GradeResult, inSlab: Boolean = false) {
+    Section(if (inSlab) "App's own measurement (through the slab)" else "Condition grade") {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
                 Modifier.size(84.dp).clip(RoundedCornerShape(12.dp))
@@ -180,8 +182,10 @@ private fun GradeCard(g: GradeResult) {
                     Text(g.label(), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Text("Centering ${g.centering.lrLabel()} L/R · ${g.centering.tbLabel()} T/B", style = MaterialTheme.typography.bodySmall)
                 } else {
-                    Text("Couldn't grade this photo", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Text("Retake it to get a grade", style = MaterialTheme.typography.bodySmall)
+                    Text(if (inSlab) "Not measurable through the slab" else "Couldn't grade this photo",
+                        style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text(if (inSlab) "Plastic and glare hide edge wear; the label grade above is the official one"
+                        else "Retake it to get a grade", style = MaterialTheme.typography.bodySmall)
                 }
             }
         }
@@ -202,6 +206,40 @@ private fun GradeCard(g: GradeResult) {
             g.notes.forEach { Text("• $it", style = MaterialTheme.typography.bodySmall) }
         }
         if (g.reliable) CompanyEstimates(g)
+    }
+}
+
+/** The grade printed on the slab label. */
+@Composable
+private fun SlabCard(slab: SlabLabel) {
+    Section("Graded slab") {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.size(84.dp).clip(RoundedCornerShape(12.dp))
+                    .background(slab.grade?.let { gradeColor(it) } ?: Color.Gray),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(slab.grade?.let { GraderScales.fmt(it) } ?: "?", color = Color.White, fontSize = 34.sp, fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.width(16.dp))
+            Column {
+                Text(slab.summary, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                slab.certNumber?.let { Text("Cert #$it", style = MaterialTheme.typography.bodySmall) }
+                slab.description.takeIf { it.isNotEmpty() }?.let {
+                    Text(it.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+        val ctx = LocalContext.current
+        val url = slab.certNumber?.let { cert -> slab.grader?.certUrl(cert) }
+        if (url != null) {
+            TextButton(onClick = { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }) {
+                Text("Verify cert on ${slab.grader?.displayName}")
+            }
+        } else {
+            Text("Read from the label. Check the cert on the grader's website to confirm the slab is genuine.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 
@@ -298,9 +336,11 @@ private fun PriceCard(a: Analysis, vm: MainViewModel) {
             Text("This card looks fake — a counterfeit has no collector value. Price shown is for a genuine copy.", color = BAD, style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.height(6.dp))
         }
-        val slab = vm.showSlabValue
-        val grade = if (a.grade.reliable) a.grade.overall else null
-        var slabGrader by remember { mutableStateOf(Grader.PSA) }
+        // A slabbed card is valued as that slab: the label's grade and grader.
+        val label = a.slab?.takeIf { it.grade != null }
+        val slab = label != null || vm.showSlabValue
+        val grade = label?.grade ?: if (a.grade.reliable) a.grade.overall else null
+        var slabGrader by remember(label) { mutableStateOf(label?.grader ?: Grader.PSA) }
         val p = remember(card.id, grade, slab, slabGrader) {
             PriceEstimator.estimate(card, grade, gradedSlab = slab && grade != null, grader = slabGrader)
         }
@@ -342,7 +382,7 @@ private fun PriceCard(a: Analysis, vm: MainViewModel) {
 }
 
 @Composable
-private fun LabelCard(vm: MainViewModel) {
+private fun LabelCard(vm: MainViewModel, slab: SlabLabel?) {
     Section("Help improve PokéGrade") {
         when (val u = vm.upload) {
             is UploadState.Done -> { Text("Uploaded. Thanks!", color = GOOD); return@Section }
@@ -354,11 +394,12 @@ private fun LabelCard(vm: MainViewModel) {
             "Only upload if you know the answer from outside the app. Your label is what the app learns from.",
             style = MaterialTheme.typography.bodySmall,
         )
-        var type by remember { mutableStateOf<LabelType?>(null) }
-        var company by remember { mutableStateOf(Grader.PSA) }
+        // A slab label we could read fills in the form.
+        var type by remember(slab) { mutableStateOf<LabelType?>(if (slab != null) LabelType.GRADED_SLAB else null) }
+        var company by remember(slab) { mutableStateOf(slab?.grader ?: Grader.PSA) }
         var otherName by remember { mutableStateOf("") }
-        var grade by remember { mutableStateOf("") }
-        var cert by remember { mutableStateOf("") }
+        var grade by remember(slab) { mutableStateOf(slab?.grade?.let { GraderScales.fmt(it) }.orEmpty()) }
+        var cert by remember(slab) { mutableStateOf(slab?.certNumber.orEmpty()) }
         LabelType.entries.forEach { t ->
             Row(Modifier.fillMaxWidth().clickable { type = t }, verticalAlignment = Alignment.CenterVertically) {
                 RadioButton(selected = type == t, onClick = { type = t })

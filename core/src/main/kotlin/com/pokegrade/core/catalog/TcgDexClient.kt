@@ -67,6 +67,7 @@ class TcgDexClient(
         }.take(maxDetails)
 
         val cards = shortlist.mapNotNull { runCatching { getCard(it.id, lang) }.getOrNull() }
+            .filter { CardRanker.plausible(it, text) }
         return CardRanker.rank(cards, text)
     }
 
@@ -174,6 +175,16 @@ val CARD_LANGUAGES = linkedMapOf(
 )
 
 object CardRanker {
+    /**
+     * A number match alone isn't enough: "030/115" exists in many sets. Drop
+     * candidates whose HP contradicts the card unless the name also matches.
+     */
+    fun plausible(c: TcgCard, text: ParsedCardText): Boolean {
+        val nameMatch = text.name != null && (c.name.contains(text.name, true) || text.name.contains(c.name, true))
+        val hpConflict = text.hp != null && c.hp?.toIntOrNull() != null && c.hp.toIntOrNull() != text.hp
+        return nameMatch || !hpConflict
+    }
+
     fun rank(cards: List<TcgCard>, text: ParsedCardText): List<TcgCard> =
         cards.sortedByDescending { c ->
             var s = 0
