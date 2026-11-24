@@ -55,6 +55,9 @@ data class GradeResult(
     val surfaceDefectRatio: Double,
     val photoQuality: PhotoQuality,
     val notes: List<String>,
+    /** False when the photo can't be graded with any confidence. */
+    val reliable: Boolean = true,
+    val reliabilityIssues: List<String> = emptyList(),
 ) {
     /** PSA-style label for a numeric grade. */
     fun label(): String = gradeLabel(overall)

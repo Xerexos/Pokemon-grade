@@ -5,6 +5,8 @@ import android.net.Uri
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,8 +26,11 @@ import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Help
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.FlipToBack
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -37,6 +42,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -58,6 +64,7 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.pokegrade.app.AiState
 import com.pokegrade.app.MainViewModel
+import com.pokegrade.app.SearchState
 import com.pokegrade.app.analysis.Analysis
 import com.pokegrade.core.auth.CheckStatus
 import com.pokegrade.core.auth.Verdict
@@ -79,6 +86,7 @@ fun ResultScreen(a: Analysis, vm: MainViewModel) {
             IconButton(onClick = vm::openSettings) { Icon(Icons.Default.Settings, "Settings") }
         }
         Header(a, vm)
+        SearchDialog(vm)
         GradeCard(a.grade)
         AuthenticityCard(a)
         PriceCard(a, vm)
@@ -115,9 +123,12 @@ private fun Header(a: Analysis, vm: MainViewModel) {
                 Text(a.text.name ?: "Unknown card", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                 Text(a.lookupError ?: "No database match found.", style = MaterialTheme.typography.bodySmall, color = WARN)
             }
+            TextButton(onClick = vm::openSearch) {
+                Icon(Icons.Default.Search, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("Search for the card")
+            }
             if (a.candidates.size > 1) {
                 Box {
-                    TextButton(onClick = { menu = true }) { Text("Not this card?") }
+                    TextButton(onClick = { menu = true }) { Text("Other close matches (${a.candidates.size - 1})") }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                         a.candidates.forEach { cand ->
                             DropdownMenuItem(
@@ -143,16 +154,29 @@ private fun GradeCard(g: GradeResult) {
     Section("Condition grade") {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
-                Modifier.size(84.dp).clip(RoundedCornerShape(12.dp)).background(gradeColor(g.overall)),
+                Modifier.size(84.dp).clip(RoundedCornerShape(12.dp))
+                    .background(if (g.reliable) gradeColor(g.overall) else Color.Gray),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(fmtGrade(g.overall), color = Color.White, fontSize = 34.sp, fontWeight = FontWeight.Bold)
+                Text(if (g.reliable) fmtGrade(g.overall) else "?", color = Color.White, fontSize = 34.sp, fontWeight = FontWeight.Bold)
             }
             Spacer(Modifier.width(16.dp))
             Column {
-                Text(g.label(), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Text("Centering ${g.centering.lrLabel()} L/R · ${g.centering.tbLabel()} T/B", style = MaterialTheme.typography.bodySmall)
+                if (g.reliable) {
+                    Text(g.label(), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text("Centering ${g.centering.lrLabel()} L/R · ${g.centering.tbLabel()} T/B", style = MaterialTheme.typography.bodySmall)
+                } else {
+                    Text("Couldn't grade this photo", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text("Retake it to get a grade", style = MaterialTheme.typography.bodySmall)
+                }
             }
+        }
+        if (!g.reliable) {
+            Spacer(Modifier.height(8.dp))
+            g.reliabilityIssues.forEach { Text("• $it", style = MaterialTheme.typography.bodyMedium, color = WARN) }
+            Spacer(Modifier.height(8.dp))
+            Text("Measurements below are low-confidence:", style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Spacer(Modifier.height(12.dp))
         SubGrade("Centering", g.subGrades.centering)
@@ -209,10 +233,11 @@ private fun AuthenticityCard(a: Analysis) {
                 }
             }
         }
+        Spacer(Modifier.height(8.dp))
+        BackSection(a, vm)
         Spacer(Modifier.height(6.dp))
         Text(
-            "Also try at home: real cards have a black layer inside (shine a phone light through — fakes glow evenly), " +
-                "and their back is a deeper blue with a crisp print.",
+            "Also try at home: real cards have a black layer inside (shine a phone light through — fakes glow evenly).",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -232,7 +257,8 @@ private fun PriceCard(a: Analysis, vm: MainViewModel) {
             Spacer(Modifier.height(6.dp))
         }
         val slab = vm.showSlabValue
-        val p = remember(card.id, a.grade.overall, slab) { PriceEstimator.estimate(card, a.grade.overall, gradedSlab = slab) }
+        val grade = if (a.grade.reliable) a.grade.overall else null
+        val p = remember(card.id, grade, slab) { PriceEstimator.estimate(card, grade, gradedSlab = slab && grade != null) }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(
@@ -245,7 +271,7 @@ private fun PriceCard(a: Analysis, vm: MainViewModel) {
             }
             Column(horizontalAlignment = Alignment.End) {
                 Text(if (slab) "Graded slab" else "Raw card", style = MaterialTheme.typography.labelMedium)
-                Switch(checked = slab, onCheckedChange = { vm.showSlabValue = it })
+                Switch(checked = slab && grade != null, enabled = grade != null, onCheckedChange = { vm.showSlabValue = it })
             }
         }
         Spacer(Modifier.height(8.dp))
@@ -263,6 +289,77 @@ private fun PriceCard(a: Analysis, vm: MainViewModel) {
             TextButton(onClick = { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }) { Text("View on TCGplayer") }
         }
     }
+}
+
+@Composable
+private fun BackSection(a: Analysis, vm: MainViewModel) {
+    val back = a.back
+    if (back == null) {
+        OutlinedButton(onClick = vm::scanBack, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.Default.FlipToBack, null); Spacer(Modifier.width(8.dp)); Text("Scan the back too")
+        }
+        Text(
+            "Fake backs are often a lighter or purple-tinted blue, or blurry.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        return
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Image(back.bitmap.asImageBitmap(), "Card back", Modifier.width(56.dp).height(78.dp).clip(RoundedCornerShape(4.dp)))
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text("Back scanned", fontWeight = FontWeight.SemiBold)
+            Text("Back checks are included in the result above.", style = MaterialTheme.typography.bodySmall)
+            TextButton(onClick = vm::scanBack) { Text("Rescan back") }
+        }
+    }
+    val hasRef = remember(vm.referenceVersion) { vm.settings.referenceBack != null }
+    TextButton(onClick = vm::saveBackAsReference) {
+        Text(if (hasRef) "This card is genuine: replace my reference back" else "This card is genuine: save as my reference back")
+    }
+}
+
+@Composable
+private fun SearchDialog(vm: MainViewModel) {
+    val s = vm.search as? SearchState.Open ?: return
+    AlertDialog(
+        onDismissRequest = vm::closeSearch,
+        confirmButton = { TextButton(onClick = vm::closeSearch) { Text("Close") } },
+        title = { Text("Search for the card") },
+        text = {
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        s.query, vm::updateQuery,
+                        label = { Text("Card name") }, singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(onClick = vm::runSearch) { Icon(Icons.Default.Search, "Search") }
+                }
+                Spacer(Modifier.height(8.dp))
+                when {
+                    s.loading -> CircularProgressIndicator(Modifier.size(24.dp))
+                    s.error != null -> Text(s.error, color = WARN, style = MaterialTheme.typography.bodySmall)
+                }
+                LazyColumn(Modifier.height(360.dp)) {
+                    items(s.results, key = { it.id }) { b ->
+                        Row(
+                            Modifier.fillMaxWidth().clickable { vm.pickSearchResult(b) }.padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            AsyncImage(b.smallImage, null, Modifier.width(44.dp).height(62.dp))
+                            Spacer(Modifier.width(10.dp))
+                            Column {
+                                Text(b.name, fontWeight = FontWeight.SemiBold)
+                                Text("${b.id.substringBeforeLast('-')} · #${b.localId}", style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                }
+            }
+        },
+    )
 }
 
 @Composable

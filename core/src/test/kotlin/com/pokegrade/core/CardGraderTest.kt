@@ -85,6 +85,43 @@ class CardGraderTest {
         assertTrue(abs(r.bounds.width - 630) <= 6, "width ${r.bounds.width}")
     }
 
+    /** Card inside a toploader-shaped frame (76x101 mm) on the table. */
+    private fun inToploader(): RgbImage {
+        val card = SyntheticCard.draw()
+        val w = card.width + 60
+        val h = card.height + 70
+        val px = IntArray(w * h) { SyntheticCard.TABLE }
+        // Light plastic frame around the card, brighter than the table.
+        val fw = ((card.height - 160) * 76.0 / 101.0).toInt() + 40
+        val fh = card.height - 160 + 60
+        val fl = (w - fw) / 2; val ft = (h - fh) / 2
+        for (y in ft until ft + fh) for (x in fl until fl + fw) px[y * w + x] = RgbImage.rgb(90, 95, 105)
+        for (y in 0 until card.height) for (x in 0 until card.width) {
+            val p = card.argb(x, y)
+            if (p != SyntheticCard.TABLE) px[(y + 35) * w + (x + 30)] = p
+        }
+        return RgbImage(w, h, px)
+    }
+
+    @Test
+    fun ignoresToploaderFrame() {
+        val r = grader.grade(inToploader())
+        println("toploader: bounds=${r.bounds} reliable=${r.reliable} ${r.subGrades}")
+        assertTrue(abs(r.bounds.left - 110) <= 4, "left ${r.bounds.left}")
+        assertTrue(abs(r.bounds.width - 630) <= 8, "width ${r.bounds.width}")
+        assertTrue(abs(r.bounds.height - 879) <= 8, "height ${r.bounds.height}")
+    }
+
+    @Test
+    fun nonCardShapeIsUnreliable() {
+        // A wide rectangle that can't be a card.
+        val img = SyntheticCard.draw().let { c -> RgbImage(c.height, c.width, IntArray(c.pixels.size) { i ->
+            val x = i % c.height; val y = i / c.height; c.argb(y, x) }) }
+        val r = grader.grade(img)
+        println("sideways: reliable=${r.reliable} issues=${r.reliabilityIssues}")
+        assertTrue(!r.reliable)
+    }
+
     @Test
     fun perfectCardGradesHigh() {
         val r = grader.grade(SyntheticCard.draw())
@@ -92,6 +129,7 @@ class CardGraderTest {
         assertEquals("50/50", r.centering.lrLabel())
         assertEquals("50/50", r.centering.tbLabel())
         assertTrue(r.overall >= 9.5, "overall ${r.overall}")
+        assertTrue(r.reliable, "issues ${r.reliabilityIssues}")
     }
 
     @Test

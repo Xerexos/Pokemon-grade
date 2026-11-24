@@ -28,7 +28,6 @@ import com.pokegrade.app.MainViewModel
 @Composable
 fun SettingsScreen(vm: MainViewModel) {
     var anthropic by remember { mutableStateOf(vm.settings.anthropicApiKey) }
-    var tcg by remember { mutableStateOf(vm.settings.pokemonTcgApiKey) }
     var auto by remember { mutableStateOf(vm.settings.autoAi) }
 
     Column(
@@ -56,23 +55,23 @@ fun SettingsScreen(vm: MainViewModel) {
             Switch(checked = auto, onCheckedChange = { auto = it })
         }
 
-        Text("Card database (optional)", style = MaterialTheme.typography.titleMedium)
+        Text("Reference back", style = MaterialTheme.typography.titleMedium)
+        val hasRef = remember(vm.referenceVersion) { vm.settings.referenceBack != null }
         Text(
-            "Card lookup and prices come from the free Pokémon TCG API. It works without a key; " +
-                "a free key from dev.pokemontcg.io gives higher rate limits.",
+            if (hasRef) "Saved. Backs you scan are compared with your known-genuine card."
+            else "None saved. Scan the back of a card you know is real and tap \"Save as my genuine reference\".",
             style = MaterialTheme.typography.bodySmall,
         )
-        OutlinedTextField(
-            tcg, { tcg = it },
-            label = { Text("Pokémon TCG API key") },
-            singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
-            modifier = Modifier.fillMaxWidth(),
+        if (hasRef) OutlinedButton(onClick = vm::clearReference) { Text("Clear reference back") }
+
+        Text(
+            "Card data and prices come from the free TCGdex database (TCGplayer and Cardmarket prices, updated daily).",
+            style = MaterialTheme.typography.bodySmall,
         )
 
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             OutlinedButton(onClick = vm::back) { Text("Cancel") }
-            Button(onClick = { vm.saveSettings(anthropic, tcg, auto) }) { Text("Save") }
+            Button(onClick = { vm.saveSettings(anthropic, auto) }) { Text("Save") }
         }
     }
 }

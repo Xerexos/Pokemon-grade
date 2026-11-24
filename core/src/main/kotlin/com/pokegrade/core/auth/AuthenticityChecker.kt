@@ -48,17 +48,23 @@ object AuthenticityChecker {
         card: TcgCard?,
         cardPhoto: RgbImage,
         reference: RgbImage?,
+        /** True when the database couldn't be reached — not evidence of a fake. */
+        lookupFailed: Boolean = false,
+        extraChecks: List<AuthCheck> = emptyList(),
     ): AuthenticityReport {
         val checks = mutableListOf<AuthCheck>()
 
-        // 1. Does the card exist?
+        // 1. Does the card exist? OCR misreads are common, so a missing match
+        //    is only a warning — the image and text checks carry the verdict.
         checks += when {
-            card != null -> AuthCheck("Card exists in official database", CheckStatus.PASS, "Matched ${card.name} · ${card.set.name} #${card.number}", 3.0)
+            card != null -> AuthCheck(EXISTS, CheckStatus.PASS, "Matched ${card.name} · ${card.set.name} #${card.number}", 3.0)
+            lookupFailed -> AuthCheck(EXISTS, CheckStatus.SKIPPED, "Couldn't reach the card database. Check your connection and try again.", 3.0)
             text.name == null && text.number == null ->
-                AuthCheck("Card exists in official database", CheckStatus.SKIPPED, "Couldn't read the card's text.", 3.0)
+                AuthCheck(EXISTS, CheckStatus.SKIPPED, "Couldn't read the card's text.", 3.0)
             else -> AuthCheck(
-                "Card exists in official database", CheckStatus.FAIL,
-                "No official card matches \"${text.name ?: "?"}\" ${text.number ?: ""}${text.setTotal?.let { "/$it" } ?: ""}. Made-up cards are a common fake.",
+                EXISTS, CheckStatus.WARN,
+                "No official card matches \"${text.name ?: "?"}\" ${text.number ?: ""}${text.setTotal?.let { "/$it" } ?: ""}. " +
+                    "This may be a misread — use \"Search for the card\" to pick it manually. Made-up cards are a common fake.",
                 3.0,
             )
         }
@@ -104,8 +110,11 @@ object AuthenticityChecker {
             checks += AuthCheck("Artwork & colour match", CheckStatus.SKIPPED, "No reference image available.", 2.5)
         }
 
+        checks += extraChecks
         return summarize(checks)
     }
+
+    private const val EXISTS = "Card exists in official database"
 
     private fun normalize(s: String) = s.lowercase().replace(Regex("[^a-z0-9]"), "")
 
@@ -113,6 +122,10 @@ object AuthenticityChecker {
 
     private const val GW = 32
     private const val GH = 45
+
+    /** How closely the photo's layout matches an official scan, -1..1. */
+    fun layoutSimilarity(photo: RgbImage, ref: RgbImage): Double =
+        correlation(grayWorld(photo.resize(GW, GH)).lumaArray(), grayWorld(ref.resize(GW, GH)).lumaArray())
 
     internal fun compareImages(photo: RgbImage, ref: RgbImage): List<AuthCheck> {
         val a = grayWorld(photo.resize(GW, GH))
@@ -196,7 +209,7 @@ object AuthenticityChecker {
 
     // --------------------------------------------------------------- verdict
 
-    private fun summarize(checks: List<AuthCheck>): AuthenticityReport {
+    fun summarize(checks: List<AuthCheck>): AuthenticityReport {
         val ran = checks.filter { it.status != CheckStatus.SKIPPED }
         val totalWeight = ran.sumOf { it.weight }
         val risk = ran.sumOf {
@@ -206,7 +219,7 @@ object AuthenticityChecker {
                 else -> 0.0
             }
         }
-        if (totalWeight < 3.0) {
+        if (totalWeight < 5.0) {
             return AuthenticityReport(Verdict.INCONCLUSIVE, 0.3, checks)
         }
         val riskRatio = risk / totalWeight
@@ -223,8 +236,4 @@ object AuthenticityChecker {
         }
         return AuthenticityReport(verdict, Math.round(confidence * 100) / 100.0, checks)
     }
-
-    /** Exposed for UI: the parser's normaliser. */
-    fun numberMatches(text: ParsedCardText, card: TcgCard) =
-        text.number != null && CardTextParser.normalizeNumber(text.number).equals(card.number, ignoreCase = true)
 }

@@ -111,9 +111,33 @@ class CatalogAndAuthTest {
     }
 
     @Test
-    fun noDatabaseMatchIsFake() {
+    fun noDatabaseMatchAloneIsInconclusive() {
         val photo = SyntheticCard.draw().crop(80, 80, 710, 959)
         val report = AuthenticityChecker.check(CardTextParser.parse(ocr), null, photo, null)
-        assertEquals(Verdict.LIKELY_FAKE, report.verdict)
+        assertEquals(Verdict.INCONCLUSIVE, report.verdict)
+    }
+
+    @Test
+    fun lookupFailureIsNotEvidenceOfFake() {
+        val photo = SyntheticCard.draw().crop(80, 80, 710, 959)
+        val report = AuthenticityChecker.check(CardTextParser.parse(ocr), null, photo, null, lookupFailed = true)
+        assertEquals(Verdict.INCONCLUSIVE, report.verdict)
+        assertTrue(report.checks.none { it.status == CheckStatus.FAIL })
+    }
+
+    @Test
+    fun cleansStylisedExAndStagePrefix() {
+        assertEquals("Genesect ex", CardTextParser.cleanName("GenesectOx"))
+        assertEquals("Genesect ex", CardTextParser.cleanName("Genesect0x 220"))
+        assertEquals("Sceptile EX", CardTextParser.cleanName("BASIC Sceptile EX HP170"))
+        assertEquals("Sceptile EX", CardTextParser.cleanName("SceptileEX"))
+        assertEquals("Charizard ex", CardTextParser.cleanName("STAGE 2 Charizard ex"))
+        assertEquals("Mega Venusaur ex", CardTextParser.cleanName("Mega Venusaur ex"))
+        assertEquals("Pikachu", CardTextParser.cleanName("Pikachu"))
+        assertEquals(listOf("Genesect ex", "Genesect"), CardTextParser.nameQueries("Genesect ex"))
+        val t = CardTextParser.parse(listOf(OcrLine("BASIC Sceptile EX", 0.05, 0.03, 0.04), OcrLine("7/98", 0.8, 0.95, 0.01)))
+        assertEquals("Sceptile EX", t.name)
+        assertEquals("7", t.number)
+        assertEquals("98", t.setTotal)
     }
 }

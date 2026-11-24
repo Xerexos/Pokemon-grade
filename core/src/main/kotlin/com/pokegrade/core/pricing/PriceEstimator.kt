@@ -57,7 +57,8 @@ object PriceEstimator {
         "1stEditionHolofoil", "holofoil", "1stEditionNormal", "normal", "unlimitedHolofoil", "reverseHolofoil", "unlimited",
     )
 
-    fun estimate(card: TcgCard, grade: Double, gradedSlab: Boolean = false, variantHint: String? = null): PriceEstimate {
+    /** @param grade estimated grade, or null when the photo couldn't be graded. */
+    fun estimate(card: TcgCard, grade: Double?, gradedSlab: Boolean = false, variantHint: String? = null): PriceEstimate {
         val prices = card.tcgplayer?.prices.orEmpty()
         val variant = variantHint?.takeIf { prices.containsKey(it) }
             ?: VARIANT_PREFERENCE.firstOrNull { prices[it]?.market != null }
@@ -66,7 +67,9 @@ object PriceEstimator {
         val cm = card.cardmarket?.prices
         val raw = p?.market ?: p?.mid ?: cm?.trendPrice?.let { it * EUR_TO_USD }
 
-        val (mult, lo, hi) = if (gradedSlab) {
+        val (mult, lo, hi) = if (grade == null) {
+            Triple(1.0, 0.85, 1.0)
+        } else if (gradedSlab) {
             MULTIPLIERS.first { grade >= it.first }.second
         } else {
             val f = rawConditionFactor(grade); Triple(f, f * 0.85, f * 1.1)
@@ -75,6 +78,8 @@ object PriceEstimator {
         val explanation = buildString {
             if (raw == null) {
                 append("No recent market sales found for this card.")
+            } else if (grade == null) {
+                append("Raw near-mint market price is $${fmt(raw)}. The condition couldn't be graded from this photo, so this assumes near mint.")
             } else if (gradedSlab) {
                 append("Raw near-mint market price is $${fmt(raw)}. ")
                 append("A PSA ${grade.toInt()} copy typically sells for about ${fmt(mult)}× raw, ")

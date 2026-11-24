@@ -3,7 +3,7 @@
 An Android app that uses your phone camera to:
 
 1. **Grade** a Pokémon card's condition on the PSA 1–10 scale, with centering, corners, edges and surface subgrades.
-2. **Check whether it's real or fake** by comparing it with the official card.
+2. **Check whether it's real or fake**, front and back.
 3. **Price it** using current TCGplayer and Cardmarket prices.
 
 ## How it works
@@ -11,52 +11,97 @@ An Android app that uses your phone camera to:
 | Step | What happens | Where it runs |
 |---|---|---|
 | Capture | CameraX preview with a card-shaped guide. The photo is cropped to the guide. You can also pick a photo from your gallery. | Phone |
-| Grade | Computer vision finds the card outline, measures border widths (centering), and looks for whitening or chips at the corners and edges and for scratches on the border. The results are mapped onto PSA's tolerances. | Phone |
-| Identify | Google ML Kit text recognition, an on-device ML model, reads the name, HP and collector number (e.g. `025/198`). | Phone |
-| Look up | The card is matched in the free [Pokémon TCG API](https://pokemontcg.io), which also provides the official scan and daily prices. | Internet |
-| Authenticate | Checks that the card exists, that HP, set number and attack names match the official card, and that the artwork layout, colour saturation and border colour match the official scan. | Phone |
-| Price | Uses the TCGplayer near-mint market price, adjusted for the estimated grade. You can switch between raw-card value and graded-slab value. | Phone |
-| AI second opinion (optional) | Sends the photo and the official scan to Claude's vision model, which returns a structured grade and authenticity assessment. | Anthropic API (needs your API key) |
+| Find the card | Looks for the strongest rectangle with a card's 63:88 shape. This ignores sleeves, toploaders, cases and the card's own inner frame. | Phone |
+| Grade | Measures border widths (centering), looks for whitening and chips at corners and edges, and for scratches on the border, then maps them onto PSA's tolerances. If the photo can't be measured (no clean outline, too much glare, blurry), it says so instead of guessing. | Phone |
+| Identify | Google ML Kit text recognition reads the name, HP and number (e.g. `025/198`). Misreads of the stylised "ex" logo are corrected. | Phone |
+| Look up | Matches the card in the free [TCGdex](https://tcgdex.dev) database. When several printings match, it picks the one whose official image looks most like your photo. You can also search by name. | Internet |
+| Authenticate (front) | Card exists; HP, set number and attack names match; artwork layout, colour saturation and border colour match the official scan. | Phone |
+| Authenticate (back) | Optional back scan. Checks the blue swirl, Poké Ball and logo are present and that the border blue is the right shade. If you've saved the back of a card you know is real, it compares against that, which is much stronger. If a trained model is bundled, it also runs that. | Phone |
+| Price | TCGplayer near-mint market price (plus Cardmarket), adjusted for the estimated grade. You can switch to an estimated graded-slab value. | Phone |
+| AI second opinion (optional) | Sends the front, the back (if scanned) and the official scan to Claude's vision model, which returns its own grade and authenticity assessment. | Anthropic API (needs your API key) |
 
 ## Getting the APK
 
-Every push to GitHub runs `.github/workflows/android.yml`, which runs the unit tests and builds the APK.
+Every push runs `.github/workflows/android.yml`, which runs the unit tests and builds the APK.
 
-1. Open the repo on GitHub, then go to **Actions** → **Build Android APK** → the latest run.
+1. On GitHub, go to **Actions** → **Build Android APK** → the latest run.
 2. Download the **PokeGrade-apk** artifact and unzip it.
-3. Copy the `.apk` to your phone and open it. You may need to allow "Install unknown apps" for your file manager.
+3. Copy the `.apk` to your phone and open it. You may need to allow "Install unknown apps".
 
-Or build it yourself with Android Studio (Ladybug or newer), or from the command line:
+Or build it yourself:
 
 ```bash
 ./gradlew :app:assembleRelease      # APK in app/build/outputs/apk/release/
-./gradlew :core:test                # grading / authenticity / pricing unit tests
+./gradlew :core:test                # unit tests (LIVE_API=1 also runs live TCGdex lookups)
 ```
-
-The release build is signed with the debug key so it installs directly. Use your own keystore before publishing to the Play Store.
-
-## Settings
-
-- **Anthropic API key** (optional): turns on the "AI second opinion". Get one at console.anthropic.com. Each inspection is billed to your account. Photos are only sent when you ask for an AI opinion, or when you turn on auto mode.
-- **Pokémon TCG API key** (optional): the API works without a key. A free key from dev.pokemontcg.io raises the rate limit.
 
 ## Tips for accurate results
 
-- Put the card on a **dark, plain** surface. A white table hides edge whitening.
+- **Take the card out** of any sleeve, toploader or case.
+- Put it on a **dark, plain** surface. A white table hides edge whitening.
 - Use even light without glare, and hold the phone flat, directly above the card.
-- Fill the guide frame.
+- For the back check, first scan the back of a card you *know* is genuine and tap **Save as my reference back**. Later backs are compared with it under similar light.
 
-## Limitations (please read)
+## Improving accuracy with real data
 
-- **Grades are estimates.** The app sees one photo of the front only. Real graders also check the back, and they inspect surface and edges under magnification. Use the app to decide whether a card is *worth* sending to PSA, BGS or CGC.
-- **Authenticity checks catch common fakes**: made-up cards, wrong HP or attacks, mismatched set numbers, and washed-out or over-saturated printing. They cannot check card stock, weight, or the light test. "Likely authentic" is not a guarantee.
-- **Graded values are ballpark figures.** Only raw (ungraded) prices come from real market data. Graded prices use typical multipliers, because no free API publishes graded sales. Check recent sold listings before buying or selling.
+The grading thresholds and the back-check rules are hand-tuned. Labelled photos make them measurable and trainable.
+
+### Fake backs
+
+1. Put back photos in `samples/backs/real/` and `samples/backs/fake/`. For example, use the Kaggle [Real and Fake Pokémon Cards](https://www.kaggle.com/datasets/ongshujian/real-and-fake-pokemon-cards) set, sorted by its labels.
+2. Run:
+
+   ```bash
+   ./gradlew :tools:run --args="backs $PWD/samples/backs --write-model"
+   ```
+
+   This prints how well each measurement separates real from fake, trains a logistic-regression model with 5-fold cross-validation, and writes `core/src/main/resources/back_model.json`. The app uses that model on the next build.
+
+### Grading
+
+1. Collect photos of graded cards with their grades:
+   - **Your own slabs**: put them in `samples/graded/10/`, `samples/graded/9/`, and so on.
+   - **eBay**: run the scraper below. It writes `samples/ebay/labels.csv`.
+2. Run:
+
+   ```bash
+   ./gradlew :tools:run --args="grades $PWD/samples/graded"     # or samples/ebay
+   ```
+
+   This reports mean error, the share of cards graded within one grade, bias, and averages per true grade.
+
+### eBay scraper
+
+`tools/ebay/ebay_graded_scraper.py` collects listing photos of PSA/BGS/CGC-graded Pokémon cards through eBay's official Browse API. The grade comes from the listing title. It only uses the Python standard library.
+
+```bash
+export EBAY_CLIENT_ID=...       # free keys from developer.ebay.com (Production keyset)
+export EBAY_CLIENT_SECRET=...
+python3 tools/ebay/ebay_graded_scraper.py --company PSA --grades 1-10 --per-grade 100
+```
+
+It skips lots, proxies, Japanese cards and ambiguous titles such as "PSA 8 or 9". It de-duplicates images and can be re-run to top up a dataset.
+
+The photos belong to the sellers and show cards inside slabs. Keep them for your own testing, and follow eBay's API License Agreement.
+
+## Settings
+
+- **Anthropic API key** (optional): turns on the "AI second opinion". Each inspection is billed to your Anthropic account. Photos are only sent when you ask for it, or when you turn on auto mode.
+- **Reference back**: the saved back of your known-genuine card. You can clear it here.
+
+## Limitations
+
+- **Grades are estimates** from one photo of the front. Use them to decide whether a card is worth sending to PSA, BGS or CGC.
+- **Authenticity checks catch common fakes**: made-up cards, wrong details, and off-colour or blurry printing. They can't check card stock or do the light test. "Likely authentic" is not a guarantee.
+- The back check is designed for the English/international back. Japanese cards have a different back.
+- **Graded values are ballpark figures.** Only raw prices come from real market data.
 - Full-art and borderless cards have little or no border to measure, so their centering is less reliable.
 
 ## Project layout
 
 ```
-core/   Pure Kotlin (JVM). Grading engine, OCR text parser, Pokémon TCG API client,
-        authenticity checker, price estimator, Claude client. Unit-tested.
-app/    Android app (Jetpack Compose, CameraX, ML Kit).
+core/    Pure Kotlin (JVM): grading engine, OCR text parser, TCGdex client,
+         authenticity + back checks, price estimator, Claude client. Unit-tested.
+app/     Android app (Jetpack Compose, CameraX, ML Kit).
+tools/   Developer CLI (evaluate grades, train the back model) and the eBay scraper.
 ```

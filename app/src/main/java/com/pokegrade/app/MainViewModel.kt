@@ -11,11 +11,13 @@ import com.pokegrade.app.analysis.Analysis
 import com.pokegrade.app.analysis.CardAnalyzer
 import com.pokegrade.app.data.Settings
 import com.pokegrade.core.ai.AiInspection
+import com.pokegrade.core.catalog.CardBrief
 import com.pokegrade.core.catalog.TcgCard
 import kotlinx.coroutines.launch
 
 sealed interface Screen {
     data object Camera : Screen
+    data object BackCamera : Screen
     data class Working(val message: String) : Screen
     data class Result(val analysis: Analysis) : Screen
     data class Error(val message: String) : Screen
@@ -29,6 +31,11 @@ sealed interface AiState {
     data class Failed(val message: String) : AiState
 }
 
+sealed interface SearchState {
+    data object Closed : SearchState
+    data class Open(val query: String = "", val loading: Boolean = false, val results: List<CardBrief> = emptyList(), val error: String? = null) : SearchState
+}
+
 class MainViewModel(app: Application) : AndroidViewModel(app) {
     val settings = Settings(app)
 
@@ -36,10 +43,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var ai by mutableStateOf<AiState>(AiState.Idle)
         private set
+    var search by mutableStateOf<SearchState>(SearchState.Closed)
+        private set
     /** Show the value as a professionally graded slab instead of a raw card. */
     var showSlabValue by mutableStateOf(false)
+    /** Bumped when the reference back changes, so the UI re-reads it. */
+    var referenceVersion by mutableStateOf(0)
+        private set
 
-    private var analyzer = CardAnalyzer(settings.pokemonTcgApiKey)
+    private val analyzer = CardAnalyzer()
     private var last: Analysis? = null
 
     fun onPhoto(photo: Bitmap) {
@@ -48,8 +60,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 val result = analyzer.analyze(photo) { screen = Screen.Working(it) }
-                last = result
-                screen = Screen.Result(result)
+                show(result)
                 if (settings.autoAi && settings.hasAi) runAi()
             } catch (e: Exception) {
                 screen = Screen.Error(e.message ?: "Something went wrong analysing the photo.")
@@ -60,12 +71,85 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun chooseCard(card: TcgCard) {
         val current = last ?: return
         ai = AiState.Idle
+        viewModelScope.launch { show(analyzer.withCard(current, card)) }
+    }
+
+    // ------------------------------------------------------------ search
+
+    fun openSearch() {
+        search = SearchState.Open(query = last?.text?.name.orEmpty())
+        if ((search as SearchState.Open).query.isNotBlank()) runSearch()
+    }
+
+    fun closeSearch() { search = SearchState.Closed }
+
+    fun updateQuery(q: String) {
+        val s = search as? SearchState.Open ?: return
+        search = s.copy(query = q)
+    }
+
+    fun runSearch() {
+        val s = search as? SearchState.Open ?: return
+        if (s.query.isBlank()) return
+        search = s.copy(loading = true, error = null)
         viewModelScope.launch {
-            val updated = analyzer.withCard(current, card) { }
-            last = updated
-            screen = Screen.Result(updated)
+            search = try {
+                val results = analyzer.search(s.query)
+                s.copy(loading = false, results = results, error = if (results.isEmpty()) "No cards named \"${s.query}\"." else null)
+            } catch (e: Exception) {
+                s.copy(loading = false, error = "Search failed: ${e.message}")
+            }
         }
     }
+
+    fun pickSearchResult(brief: CardBrief) {
+        val current = last ?: return
+        search = SearchState.Closed
+        ai = AiState.Idle
+        screen = Screen.Working("Loading ${brief.name}…")
+        viewModelScope.launch {
+            try {
+                show(analyzer.withCard(current, analyzer.getCard(brief.id)))
+            } catch (e: Exception) {
+                show(current)
+            }
+        }
+    }
+
+    // -------------------------------------------------------------- back
+
+    fun scanBack() { screen = Screen.BackCamera }
+
+    fun onBackPhoto(photo: Bitmap) {
+        val current = last ?: return
+        screen = Screen.Working("Checking the back…")
+        viewModelScope.launch {
+            try {
+                show(analyzer.withBack(current, photo, settings.referenceBack))
+            } catch (e: Exception) {
+                screen = Screen.Error(e.message ?: "Couldn't analyse the back.")
+            }
+        }
+    }
+
+    /** Save the current back as the user's known-genuine reference. */
+    fun saveBackAsReference() {
+        val current = last ?: return
+        val back = current.back ?: return
+        settings.referenceBack = back.features
+        referenceVersion++
+        // Re-run the back checks against the new reference.
+        viewModelScope.launch {
+            show(analyzer.withBack(current, back.bitmap, back.features))
+        }
+    }
+
+    fun clearReference() {
+        settings.referenceBack = null
+        referenceVersion++
+    }
+
+    // ---------------------------------------------------------------- AI
 
     fun runAi() {
         val current = last ?: return
@@ -80,23 +164,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ---------------------------------------------------------- navigation
+
     fun openSettings() { screen = Screen.Settings }
 
-    fun saveSettings(anthropicKey: String, tcgKey: String, autoAi: Boolean) {
+    fun saveSettings(anthropicKey: String, autoAi: Boolean) {
         settings.anthropicApiKey = anthropicKey
-        settings.pokemonTcgApiKey = tcgKey
         settings.autoAi = autoAi
-        analyzer = CardAnalyzer(settings.pokemonTcgApiKey)
         back()
     }
 
     fun back() {
-        screen = last?.let { if (screen is Screen.Settings) Screen.Result(it) else null } ?: Screen.Camera
+        screen = last?.let { Screen.Result(it) } ?: Screen.Camera
     }
 
     fun scanAnother() {
         last = null
         ai = AiState.Idle
+        search = SearchState.Closed
         screen = Screen.Camera
+    }
+
+    private fun show(a: Analysis) {
+        last = a
+        screen = Screen.Result(a)
     }
 }

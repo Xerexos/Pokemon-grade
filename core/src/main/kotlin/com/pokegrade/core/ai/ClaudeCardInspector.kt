@@ -55,8 +55,9 @@ class ClaudeCardInspector(apiKey: String, private val model: String = DEFAULT_MO
 
     /**
      * @param jpegBase64 the card photo, JPEG, base64 (no line breaks). Keep the long side ≤ 1568 px.
+     * @param backJpegBase64 optional photo of the card's back, same format.
      */
-    fun inspect(jpegBase64: String, card: TcgCard?, onDevice: GradeResult?): AiInspection {
+    fun inspect(jpegBase64: String, card: TcgCard?, onDevice: GradeResult?, backJpegBase64: String? = null): AiInspection {
         val content = mutableListOf<BetaContentBlockParam>()
         content += BetaContentBlockParam.ofText(BetaTextBlockParam.builder().text("Photo of the card to grade:").build())
         content += BetaContentBlockParam.ofImage(
@@ -69,6 +70,19 @@ class ClaudeCardInspector(apiKey: String, private val model: String = DEFAULT_MO
                 )
                 .build()
         )
+        if (backJpegBase64 != null) {
+            content += BetaContentBlockParam.ofText(BetaTextBlockParam.builder().text("Photo of the same card's back:").build())
+            content += BetaContentBlockParam.ofImage(
+                BetaImageBlockParam.builder()
+                    .source(
+                        BetaBase64ImageSource.builder()
+                            .mediaType(BetaBase64ImageSource.MediaType.IMAGE_JPEG)
+                            .data(backJpegBase64)
+                            .build()
+                    )
+                    .build()
+            )
+        }
         val refUrl = card?.let { it.images.large ?: it.images.small }
         if (card != null && refUrl != null) {
             content += BetaContentBlockParam.ofText(
@@ -134,6 +148,7 @@ class ClaudeCardInspector(apiKey: String, private val model: String = DEFAULT_MO
         appendLine()
         appendLine("Use the measurements as hints, but trust what you can see. Only the front is visible, so say so if the back could change the grade.")
         appendLine("For authenticity, compare font, colour, holo pattern, energy symbols, text spelling, borders and layout against the official scan.")
+        appendLine("If a back photo is included, check the blue shade, swirl detail, Poké Ball and logo print quality: counterfeit backs are often lighter, purple-tinted or blurry.")
         appendLine("If the photo is too blurry or glary to judge something, lower your confidence and say what to reshoot.")
     }
 

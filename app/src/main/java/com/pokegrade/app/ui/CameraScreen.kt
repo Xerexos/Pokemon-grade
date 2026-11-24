@@ -73,7 +73,11 @@ private const val GUIDE_WIDTH = 0.74f
 private const val CARD_ASPECT = 63f / 88f
 
 @Composable
-fun CameraScreen(onPhoto: (Bitmap) -> Unit, onSettings: () -> Unit) {
+fun CameraScreen(
+    onPhoto: (Bitmap) -> Unit,
+    onSettings: () -> Unit,
+    hint: String = "Take the card out of any sleeve or case and place it inside the frame on a dark, plain surface.\nAvoid glare and hold the phone flat.",
+) {
     val context = LocalContext.current
     var granted by remember {
         mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
@@ -87,7 +91,7 @@ fun CameraScreen(onPhoto: (Bitmap) -> Unit, onSettings: () -> Unit) {
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         if (granted) {
-            CameraPreview(onPhoto)
+            CameraPreview(onPhoto, hint)
         } else {
             Column(
                 Modifier.fillMaxSize().padding(32.dp),
@@ -112,7 +116,7 @@ fun CameraScreen(onPhoto: (Bitmap) -> Unit, onSettings: () -> Unit) {
 }
 
 @Composable
-private fun CameraPreview(onPhoto: (Bitmap) -> Unit) {
+private fun CameraPreview(onPhoto: (Bitmap) -> Unit, hint: String) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val previewView = remember { PreviewView(context).apply { scaleType = PreviewView.ScaleType.FILL_CENTER } }
@@ -140,10 +144,7 @@ private fun CameraPreview(onPhoto: (Bitmap) -> Unit) {
             Modifier.align(Alignment.BottomCenter).padding(bottom = 36.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text(
-                "Place the card inside the frame on a dark, plain surface.\nAvoid glare and hold the phone flat.",
-                color = Color.White, textAlign = TextAlign.Center,
-            )
+            Text(hint, color = Color.White, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 24.dp))
             Spacer(Modifier.height(16.dp))
             Box(
                 Modifier.size(76.dp).border(4.dp, Color.White, CircleShape).padding(8.dp)

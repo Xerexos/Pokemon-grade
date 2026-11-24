@@ -3,6 +3,7 @@ package com.pokegrade.core.grading
 import com.pokegrade.core.image.ColorMath
 import com.pokegrade.core.image.RgbImage
 import kotlin.math.abs
+import kotlin.math.exp
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
@@ -83,7 +84,21 @@ class CardGrader(private val config: Config = Config()) {
         if (surface > 0.03) notes += "Possible scratches, print lines or marks on the surface."
         notes += quality.problems
 
+        // Refuse to give a confident grade when the measurements can't be trusted.
+        val issues = mutableListOf<String>()
+        if (lastAspectError > 0.06) {
+            issues += "Couldn't find a clean card outline. Take the card out of any sleeve, toploader or case and lay it flat on a dark, plain surface."
+        }
+        if (quality.cardFillRatio < 0.2) issues += "The card is too small in the photo."
+        if (quality.sharpness < 25) issues += "The photo is too blurry to see wear."
+        if (quality.glareRatio > 0.06) issues += "Too much glare on the card."
+        if (sub.corners <= 3.0 && sub.edges <= 3.0) {
+            issues += "Every corner and edge measured as damaged, which usually means a sleeve, glare or the background confused the measurement."
+        }
+
         return GradeResult(
+            reliable = issues.isEmpty(),
+            reliabilityIssues = issues,
             overall = overall,
             subGrades = sub,
             centering = centering,
@@ -94,6 +109,16 @@ class CardGrader(private val config: Config = Config()) {
             photoQuality = quality,
             notes = notes,
         )
+    }
+
+    /** A card found in a photo: the cropped card and whether its outline looked right. */
+    data class LocatedCard(val card: RgbImage, val bounds: CardBounds, val outlineOk: Boolean)
+
+    /** Find and crop the card (used for backs, where no grading is needed). */
+    fun locateCard(photo: RgbImage): LocatedCard {
+        val img = normalize(photo)
+        val b = findCardBounds(img, mutableListOf())
+        return LocatedCard(img.crop(b.left, b.top, b.right, b.bottom), b, lastAspectError <= 0.06)
     }
 
     // ---------------------------------------------------------------- setup
@@ -142,42 +167,68 @@ class CardGrader(private val config: Config = Config()) {
         val cs = smooth(col)
         val rs = smooth(row)
 
-        val left = outermostPeak(cs, 0, (w * 0.4).toInt(), fromStart = true) ?: 0
-        val right = outermostPeak(cs, (w * 0.6).toInt(), w, fromStart = false)?.plus(1) ?: w
-        val top = outermostPeak(rs, 0, (h * 0.4).toInt(), fromStart = true) ?: 0
-        val bottom = outermostPeak(rs, (h * 0.6).toInt(), h, fromStart = false)?.plus(1) ?: h
+        // Candidate edges for each side, then pick the rectangle that is
+        // strongest *and* shaped like a card (63:88). This skips the edges of
+        // sleeves, toploaders and cases, and the inner border/art frame.
+        val lc = peaks(cs, 0, (w * 0.45).toInt())
+        val rc = peaks(cs, (w * 0.55).toInt(), w)
+        val tc = peaks(rs, 0, (h * 0.45).toInt())
+        val bc = peaks(rs, (h * 0.55).toInt(), h)
 
-        val b = CardBounds(left, top, right, bottom)
+        var best: CardBounds? = null
+        var bestScore = 0.0
+        var bestAspectErr = 1.0
+        for (l in lc) for (r in rc) for (t in tc) for (bo in bc) {
+            val bw = r.pos + 1 - l.pos
+            val bh = bo.pos + 1 - t.pos
+            if (bw < w * 0.3 || bh < h * 0.3) continue
+            val err = abs(bw.toDouble() / bh - config.cardAspect) / config.cardAspect
+            val strength = (l.norm + r.norm + t.norm + bo.norm) / 4
+            val area = bw.toDouble() * bh / (w.toDouble() * h)
+            val score = strength * exp(-(err / 0.035) * (err / 0.035)) * sqrt(area)
+            if (score > bestScore) {
+                bestScore = score; bestAspectErr = err
+                best = CardBounds(l.pos, t.pos, r.pos + 1, bo.pos + 1)
+            }
+        }
+        val b = best ?: CardBounds(0, 0, w, h)
         val aspect = b.width.toDouble() / max(1, b.height)
-        if (abs(aspect - config.cardAspect) / config.cardAspect > 0.12) {
+        lastAspectError = if (best == null) 1.0 else bestAspectErr
+        if (best == null) {
+            notes += "Couldn't find the card's edges."
+        } else if (bestAspectErr > 0.06) {
             notes += "Card outline looks skewed (aspect ${"%.2f".format(aspect)}). Hold the phone flat above the card."
         }
         return b
     }
 
+    private data class Peak(val pos: Int, val norm: Double)
+
+    /** Up to 6 strongest local maxima in [from, to), normalised to the window's max. */
+    private fun peaks(p: DoubleArray, from: Int, to: Int): List<Peak> {
+        if (to - from < 5) return emptyList()
+        var mx = 0.0
+        for (i in from until to) mx = max(mx, p[i])
+        val mean = (from until to).sumOf { p[it] } / (to - from)
+        if (mx <= 0 || mx < mean * 2.0) return emptyList()
+        val found = (from + 1 until to - 1)
+            .filter { p[it] >= p[it - 1] && p[it] >= p[it + 1] && p[it] >= mx * 0.25 && p[it] >= mean * 1.8 }
+            .sortedByDescending { p[it] }
+        val picked = mutableListOf<Int>()
+        for (i in found) {
+            if (picked.none { abs(it - i) < 4 }) picked += i
+            if (picked.size == 6) break
+        }
+        return picked.map { Peak(it, p[it] / mx) }
+    }
+
+    /** Aspect error of the last detected outline (0 = perfect card shape). */
+    private var lastAspectError = 0.0
+
     private fun smooth(a: DoubleArray): DoubleArray = DoubleArray(a.size) { i ->
         var s = 0.0; var n = 0
         for (j in i - 2..i + 2) if (j in a.indices) { s += a[j]; n++ }
         s / n
-    }
-
-    /**
-     * The card's outline is the outermost strong straight edge. Inner edges
-     * (border → artwork) can be stronger, so we take the first local maximum
-     * from the outside that reaches half of the strongest peak.
-     */
-    private fun outermostPeak(p: DoubleArray, from: Int, to: Int, fromStart: Boolean): Int? {
-        if (to - from < 5) return null
-        var best = 0.0
-        for (i in from until to) best = max(best, p[i])
-        val mean = (from until to).sumOf { p[it] } / (to - from)
-        if (best < mean * 2.5 || best <= 0) return null // no clear edge; card fills the frame
-        val thr = best * 0.5
-        val range = if (fromStart) (from + 2 until to - 2) else (to - 3 downTo from + 2)
-        for (i in range) {
-            if (p[i] >= thr && p[i] >= p[i - 1] && p[i] >= p[i + 1]) return i
-        }
-        return null
     }
 
     // --------------------------------------------------------------- borders

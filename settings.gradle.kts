@@ -14,4 +14,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "PokeGrade"
-include(":core", ":app")
+include(":core", ":app", ":tools")

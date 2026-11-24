@@ -43,6 +43,14 @@ fun App(vm: MainViewModel) {
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         when (val s = vm.screen) {
             Screen.Camera -> CameraScreen(onPhoto = vm::onPhoto, onSettings = vm::openSettings)
+            Screen.BackCamera -> {
+                BackHandler { vm.back() }
+                CameraScreen(
+                    onPhoto = vm::onBackPhoto,
+                    onSettings = vm::openSettings,
+                    hint = "Flip the card over and place its BACK inside the frame on a dark surface.",
+                )
+            }
             is Screen.Working -> Busy(s.message)
             is Screen.Result -> {
                 BackHandler { vm.scanAnother() }
