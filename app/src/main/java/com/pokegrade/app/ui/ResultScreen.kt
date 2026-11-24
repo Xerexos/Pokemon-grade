@@ -88,7 +88,7 @@ fun ResultScreen(a: Analysis, vm: MainViewModel) {
         Header(a, vm)
         SearchDialog(vm)
         GradeCard(a.grade)
-        AuthenticityCard(a)
+        AuthenticityCard(a, vm)
         PriceCard(a, vm)
         AiCard(vm)
         Button(onClick = vm::scanAnother, modifier = Modifier.fillMaxWidth()) {
@@ -204,7 +204,7 @@ private fun SubGrade(name: String, v: Double) {
 }
 
 @Composable
-private fun AuthenticityCard(a: Analysis) {
+private fun AuthenticityCard(a: Analysis, vm: MainViewModel) {
     val r = a.authenticity
     val (color, icon) = when (r.verdict) {
         Verdict.LIKELY_AUTHENTIC -> GOOD to Icons.Default.CheckCircle
