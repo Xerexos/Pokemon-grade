@@ -44,6 +44,15 @@ Cards are looked up in their own language. The language is detected from the tex
 - Japanese, Chinese and Korean text models download through Google Play services after install.
 - The back check only knows the international back, so it's skipped for Asian cards.
 
+## Prices for cards without database data
+
+Some cards have no price in TCGdex, for example most mainland-China (Simplified Chinese) cards. For those, the price section offers **eBay sold**, **eBay for sale** and **PriceCharting** buttons, searched with an English phrase:
+
+- Raw card: "pokemon chinese Hisuian Growlithe 020". Names are translated with a bundled table built from [PokeAPI](https://pokeapi.co) data (BSD-3-Clause).
+- Slab: "pokemon chinese Captain Pikachu 701 DSG 10", taken from the label.
+
+The same buttons appear under the database price for every card.
+
 ## Grading companies
 
 The results screen can show the estimate the way each company would print it: PSA, Beckett (BGS, with subgrades and Black Label), CGC (Pristine 10), SGC, TAG, ACE, Diamond Service Grading (DSG), AGS, HGA, GMA and MNT.

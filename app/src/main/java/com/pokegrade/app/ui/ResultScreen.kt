@@ -80,6 +80,7 @@ import com.pokegrade.core.auth.CheckStatus
 import com.pokegrade.core.auth.Verdict
 import com.pokegrade.core.grading.GradeResult
 import com.pokegrade.core.pricing.PriceEstimator
+import com.pokegrade.core.pricing.PriceLinks
 
 private val GOOD = Color(0xFF16A34A)
 private val WARN = Color(0xFFD97706)
@@ -329,7 +330,12 @@ private fun PriceCard(a: Analysis, vm: MainViewModel) {
     val card = a.card
     Section("Market value") {
         if (card == null || a.price == null) {
-            Text("Couldn't identify the card, so no price is available. Try a sharper photo or pick the right card above.")
+            Text(
+                "No database price for this card. Check what it sells for on these marketplaces " +
+                    "(\"eBay sold\" shows real completed sales).",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            MarketplaceLinks(a)
             return@Section
         }
         if (a.authenticity.verdict == Verdict.LIKELY_FAKE) {
@@ -377,6 +383,21 @@ private fun PriceCard(a: Analysis, vm: MainViewModel) {
         val ctx = LocalContext.current
         p.tcgplayerUrl?.let { url ->
             TextButton(onClick = { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }) { Text("View on TCGplayer") }
+        }
+        Text("Compare recent sales:", style = MaterialTheme.typography.labelMedium)
+        MarketplaceLinks(a)
+    }
+}
+
+/** Buttons that open marketplace searches for this card (sold listings first). */
+@Composable
+private fun MarketplaceLinks(a: Analysis) {
+    val ctx = LocalContext.current
+    val query = remember(a.card?.id, a.text, a.slab) { PriceLinks.query(a.text, a.card, a.slab) }
+    Text("Searching for: $query", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        PriceLinks.links(query).forEach { link ->
+            OutlinedButton(onClick = { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link.url))) }) { Text(link.label) }
         }
     }
 }
