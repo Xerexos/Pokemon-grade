@@ -74,6 +74,8 @@ dependencies {
     implementation(platform("com.google.firebase:firebase-bom:33.7.0"))
     implementation("com.google.firebase:firebase-firestore")
     implementation("com.google.firebase:firebase-auth")
+    // Firebase pulls in an empty "listenablefuture" placeholder; CameraX needs the real class.
+    implementation("com.google.guava:guava:33.3.1-android")
 }
 
 // Firebase config comes from app/google-services.json (kept out of git; CI writes it
