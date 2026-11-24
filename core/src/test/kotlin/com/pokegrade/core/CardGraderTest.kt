@@ -166,3 +166,25 @@ class CardGraderTest {
         assertTrue(r.subGrades.surface < 9.5, "surface ${r.subGrades.surface}")
     }
 }
+
+class GraderScalesTest {
+    @Test
+    fun convertsToEachCompanysScale() {
+        val grader = com.pokegrade.core.grading.CardGrader()
+        val perfect = grader.grade(SyntheticCard.draw())
+        val bgs = com.pokegrade.core.grading.GraderScales.estimate(perfect, com.pokegrade.core.grading.Grader.BGS)
+        val cgc = com.pokegrade.core.grading.GraderScales.estimate(perfect, com.pokegrade.core.grading.Grader.CGC)
+        val psa = com.pokegrade.core.grading.GraderScales.estimate(perfect, com.pokegrade.core.grading.Grader.PSA)
+        println("$psa\n$bgs\n$cgc")
+        assertEquals("Gem Mint 10", psa.label)
+        assertEquals("Black Label Pristine 10", bgs.label)
+        assertEquals("Pristine 10", cgc.label)
+        assertTrue(bgs.subgrades != null && psa.subgrades == null)
+
+        val worn = grader.grade(SyntheticCard.draw(whiteCorners = 34))
+        val dsg = com.pokegrade.core.grading.GraderScales.estimate(worn, com.pokegrade.core.grading.Grader.DSG)
+        val ace = com.pokegrade.core.grading.GraderScales.estimate(worn, com.pokegrade.core.grading.Grader.ACE)
+        println("$dsg\n$ace")
+        assertTrue(dsg.grade < 10 && ace.grade % 1.0 == 0.0)
+    }
+}

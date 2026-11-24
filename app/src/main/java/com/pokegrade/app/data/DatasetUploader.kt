@@ -25,7 +25,7 @@ import java.io.ByteArrayOutputStream
 
 /** What the user knows about a card, from a source outside the app. */
 enum class LabelType(val title: String, val description: String) {
-    GRADED_SLAB("In a graded slab", "Enter the grading company, grade and cert number"),
+    GRADED_SLAB("In a graded slab", "PSA, Beckett, CGC, SGC, TAG, ACE, DSG and more"),
     PULLED_GENUINE("I pulled it from a pack", "Known genuine"),
     CONFIRMED_FAKE("Confirmed fake", "You know this card is counterfeit"),
 }
@@ -35,6 +35,8 @@ data class ScanLabel(
     val company: String? = null,
     val grade: Double? = null,
     val certNumber: String? = null,
+    /** Free-text company name when company is OTHER. */
+    val companyName: String? = null,
 )
 
 /**
@@ -86,7 +88,8 @@ class DatasetUploader(private val context: Context) {
                 "type" to label.type.name,
                 "company" to label.company,
                 "grade" to label.grade,
-                "certNumber" to label.certNumber?.filter { it.isDigit() },
+                "companyName" to label.companyName?.trim()?.take(30),
+                "certNumber" to label.certNumber?.uppercase()?.filter { it in 'A'..'Z' || it in '0'..'9' || it == '-' },
                 // Filled in later by the owner's tools after checking the cert.
                 "verified" to false,
             ),

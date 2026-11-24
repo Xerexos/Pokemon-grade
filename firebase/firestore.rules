@@ -19,9 +19,10 @@ rules_version = '2';
 //   - appVersion: string (required, <= 20 chars)
 //   - label: map (required)
 //       type: 'GRADED_SLAB' | 'PULLED_GENUINE' | 'CONFIRMED_FAKE'
-//       company: null | 'PSA' | 'BGS' | 'CGC'
+//       company: null | 'PSA' | 'BGS' | 'CGC' | 'SGC' | 'TAG' | 'ACE' | 'DSG' | 'AGS' | 'HGA' | 'GMA' | 'MNT' | 'OTHER'
+//       companyName: null | string 1-30 chars (only when company == 'OTHER')
 //       grade: null | number 1..10
-//       certNumber: null | string of 6-12 digits
+//       certNumber: null | string of 4-20 chars [A-Z0-9-]
 //       verified: false (only the owner's Admin SDK tools may set true)
 //   - card: null | map {id, language, name, set, number, rarity} (strings, length-limited;
 //       language is a TCGdex code: en ja fr de es it pt ko zh-tw zh-cn id th)
@@ -58,13 +59,19 @@ service cloud.firestore {
 
     function validLabel(l) {
       return l is map
-        && l.keys().hasOnly(['type', 'company', 'grade', 'certNumber', 'verified'])
+        && l.keys().hasOnly(['type', 'company', 'companyName', 'grade', 'certNumber', 'verified'])
         && l.type in ['GRADED_SLAB', 'PULLED_GENUINE', 'CONFIRMED_FAKE']
         && l.verified == false
-        && (!('company' in l) || l.company == null || l.company in ['PSA', 'BGS', 'CGC'])
+        && (!('company' in l) || l.company == null
+            || l.company in ['PSA', 'BGS', 'CGC', 'SGC', 'TAG', 'ACE', 'DSG', 'AGS', 'HGA', 'GMA', 'MNT', 'OTHER'])
+        // Free-text name only makes sense for OTHER, and is short.
+        && (!('companyName' in l) || l.companyName == null
+            || (l.company == 'OTHER' && l.companyName is string
+                && l.companyName.size() >= 1 && l.companyName.size() <= 30))
         && (!('grade' in l) || l.grade == null || (l.grade is number && l.grade >= 1 && l.grade <= 10))
+        // Cert formats differ by company: letters, digits and dashes, 4-20 chars.
         && (!('certNumber' in l) || l.certNumber == null
-            || (l.certNumber is string && l.certNumber.matches('^[0-9]{6,12}$')));
+            || (l.certNumber is string && l.certNumber.matches('^[A-Z0-9-]{4,20}$')));
     }
 
     function validCard(c) {

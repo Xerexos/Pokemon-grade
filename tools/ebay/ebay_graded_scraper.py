@@ -57,10 +57,30 @@ EXCLUDE = re.compile(
 )
 
 
+# Grading companies and the words sellers use for them in titles.
+COMPANIES = {
+    "PSA": ["PSA"],
+    "BGS": ["BGS", "Beckett"],
+    "CGC": ["CGC"],
+    "SGC": ["SGC"],
+    "TAG": ["TAG"],
+    "ACE": ["ACE"],
+    "DSG": ["DSG", "Diamond Service Grading"],
+    "AGS": ["AGS"],
+    "HGA": ["HGA"],
+    "GMA": ["GMA"],
+    "MNT": ["MNT"],
+}
+
+
+def company_regex(company: str) -> str:
+    return "(?:" + "|".join(re.escape(a) for a in COMPANIES[company]) + ")"
+
+
 def grade_pattern(company: str) -> re.Pattern:
-    # "PSA 10", "PSA10", "PSA GEM MINT 10", "BGS 9.5", "CGC 8.5"
+    # "PSA 10", "PSA10", "PSA GEM MINT 10", "BGS 9.5", "Beckett 9.5", "CGC Pristine 10"
     return re.compile(
-        rf"\b{company}\s*(?:gem\s*mint|gem-mt|mint|nm-mt|nm|ex-mt|ex|vg-ex|vg|good|fair|poor|pristine|authentic)?\s*"
+        rf"\b{company_regex(company)}\s*(?:black\s*label|gem\s*mint|gem-mt|mint|nm-mt|nm|ex-mt|ex|vg-ex|vg|good|fair|poor|pristine|authentic)?\s*"
         r"(10|[1-9](?:\.5)?)\b",
         re.I,
     )
@@ -70,13 +90,14 @@ def parse_grade(title: str, company: str) -> float | None:
     """Return the single grade named in a title, or None if absent/ambiguous/excluded."""
     if EXCLUDE.search(title):
         return None
-    if re.search(r"\b(?:PSA|BGS|CGC|SGC|TAG|ACE)", title, re.I) is None:
+    if re.search(rf"\b{company_regex(company)}", title, re.I) is None:
         return None
     # "PSA 8 or 9", "PSA 9/10", "PSA 9 & 10": several grades on offer.
-    if re.search(rf"\b{company}\s*\d+(?:\.5)?\s*(?:or|/|&|and|-)\s*\d", title, re.I):
+    if re.search(rf"\b{company_regex(company)}\s*\d+(?:\.5)?\s*(?:or|/|&|and|-)\s*\d", title, re.I):
         return None
-    others = {"PSA", "BGS", "CGC", "SGC", "TAG", "ACE"} - {company.upper()}
-    if any(re.search(rf"\b{o}\s*\d", title, re.I) for o in others):
+    # Titles naming a grade from another company too ("PSA 9 BGS 9.5") are ambiguous.
+    others = [c for c in COMPANIES if c != company.upper()]
+    if any(re.search(rf"\b{company_regex(o)}\s*\d", title, re.I) for o in others):
         return None
     grades = {float(m) for m in grade_pattern(company).findall(title)}
     if len(grades) != 1:
@@ -162,7 +183,7 @@ def parse_grades(spec: str) -> list[float]:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--company", default="PSA", choices=["PSA", "BGS", "CGC"])
+    ap.add_argument("--company", default="PSA", choices=sorted(COMPANIES))
     ap.add_argument("--grades", default="1-10", help="e.g. 1-10 or 8,9,10 (BGS/CGC also 9.5 etc.)")
     ap.add_argument("--per-grade", type=int, default=100)
     ap.add_argument("--out", default="samples/ebay")
@@ -194,7 +215,7 @@ def main() -> None:
         label = f"{grade:g}"
         have = sum(1 for r in rows if r["company"] == args.company and float(r["grade"]) == grade)
         print(f"{args.company} {label}: have {have}, want {args.per_grade}")
-        query = f"pokemon {args.company} {label} {args.extra_query}".strip()
+        query = f"pokemon {COMPANIES[args.company][-1] if args.company == 'DSG' else args.company} {label} {args.extra_query}".strip()
         folder = out / "images" / f"{args.company}-{label}"
         folder.mkdir(parents=True, exist_ok=True)
 

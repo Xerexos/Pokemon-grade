@@ -1,6 +1,7 @@
 package com.pokegrade.core.pricing
 
 import com.pokegrade.core.catalog.TcgCard
+import com.pokegrade.core.grading.Grader
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -58,7 +59,14 @@ object PriceEstimator {
     )
 
     /** @param grade estimated grade, or null when the photo couldn't be graded. */
-    fun estimate(card: TcgCard, grade: Double?, gradedSlab: Boolean = false, variantHint: String? = null): PriceEstimate {
+    fun estimate(
+        card: TcgCard,
+        grade: Double?,
+        gradedSlab: Boolean = false,
+        variantHint: String? = null,
+        /** Which company's slab, for graded values. */
+        grader: Grader = Grader.PSA,
+    ): PriceEstimate {
         val prices = card.tcgplayer?.prices.orEmpty()
         val variant = variantHint?.takeIf { prices.containsKey(it) }
             ?: VARIANT_PREFERENCE.firstOrNull { prices[it]?.market != null }
@@ -70,7 +78,10 @@ object PriceEstimator {
         val (mult, lo, hi) = if (grade == null) {
             Triple(1.0, 0.85, 1.0)
         } else if (gradedSlab) {
-            MULTIPLIERS.first { grade >= it.first }.second
+            val (m, l, h) = MULTIPLIERS.first { grade >= it.first }.second
+            // Other companies' slabs usually sell for less than PSA's at the same grade.
+            val r = grader.resaleVsPsa
+            Triple(m * r, l * r, h * r)
         } else {
             val f = rawConditionFactor(grade); Triple(f, f * 0.85, f * 1.1)
         }
@@ -82,7 +93,9 @@ object PriceEstimator {
                 append("Raw near-mint market price is $${fmt(raw)}. The condition couldn't be graded from this photo, so this assumes near mint.")
             } else if (gradedSlab) {
                 append("Raw near-mint market price is $${fmt(raw)}. ")
-                append("A PSA ${grade.toInt()} copy typically sells for about ${fmt(mult)}× raw, ")
+                append("A ${grader.displayName} ${fmt(grade)} copy typically sells for about ${fmt(mult)}× raw")
+                if (grader != Grader.PSA) append(" (${grader.displayName} slabs usually resell below PSA)")
+                append(", ")
                 append("but graded premiums vary a lot by card — check recent sold listings before buying or selling.")
             } else {
                 append("Raw near-mint market price is $${fmt(raw)}. ")

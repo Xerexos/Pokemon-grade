@@ -41,6 +41,12 @@ from pathlib import Path
 
 PSA_BASE = "https://api.psacard.com/publicapi"
 
+# Public cert lookup pages, for checking non-PSA slabs by hand.
+CERT_LOOKUP = {
+    "PSA": "https://www.psacard.com/cert/{cert}",
+    "CGC": "https://www.cgccards.com/certlookup/{cert}/",
+}
+
 
 # ----------------------------------------------------------------- PSA API
 
@@ -245,6 +251,9 @@ def main() -> None:
                 if back:
                     place(back, out / "backs" / side, f"{sid}.jpg")
 
+            company = label.get("company")
+            if company in CERT_LOOKUP and cert:
+                scan["certLookup"] = CERT_LOOKUP[company].format(cert=cert)
             scan["id"] = sid
             scan["verification"] = verification
             scan["finalGrade"] = final_grade

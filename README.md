@@ -44,6 +44,14 @@ Cards are looked up in their own language. The language is detected from the tex
 - Japanese, Chinese and Korean text models download through Google Play services after install.
 - The back check only knows the international back, so it's skipped for Asian cards.
 
+## Grading companies
+
+The results screen can show the estimate the way each company would print it: PSA, Beckett (BGS, with subgrades and Black Label), CGC (Pristine 10), SGC, TAG, ACE, Diamond Service Grading (DSG), AGS, HGA, GMA and MNT.
+
+- The graded-slab value lets you pick the company. Boutique graders' slabs usually resell below PSA, so their values are scaled down. These are rough multipliers, not market data.
+- Labelled uploads accept any of these companies, or "Other" with a name.
+- Only PSA certs are checked automatically (through PSA's API). For CGC, the pull script records a cert-lookup link so you can check by hand.
+
 ## Tips for accurate results
 
 - **Take the card out** of any sleeve, toploader or case.

@@ -69,6 +69,8 @@ import com.pokegrade.app.AiState
 import com.pokegrade.app.MainViewModel
 import com.pokegrade.app.SearchState
 import com.pokegrade.core.catalog.CARD_LANGUAGES
+import com.pokegrade.core.grading.Grader
+import com.pokegrade.core.grading.GraderScales
 import com.pokegrade.app.UploadState
 import com.pokegrade.app.data.LabelType
 import com.pokegrade.app.data.ScanLabel
@@ -199,7 +201,35 @@ private fun GradeCard(g: GradeResult) {
             Spacer(Modifier.height(8.dp))
             g.notes.forEach { Text("• $it", style = MaterialTheme.typography.bodySmall) }
         }
+        if (g.reliable) CompanyEstimates(g)
     }
+}
+
+/** The estimate as each grading company would likely print it. */
+@Composable
+private fun CompanyEstimates(g: GradeResult) {
+    var open by remember { mutableStateOf(false) }
+    TextButton(onClick = { open = !open }) { Text(if (open) "Hide grading companies" else "Estimate by grading company") }
+    if (!open) return
+    Grader.entries.filter { it != Grader.OTHER }.forEach { gr ->
+        val e = GraderScales.estimate(g, gr)
+        Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+            Column(Modifier.weight(1f)) {
+                Text(gr.displayName, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
+                e.subgrades?.let { s ->
+                    Text(
+                        "C ${GraderScales.fmt(s.centering)} · Co ${GraderScales.fmt(s.corners)} · E ${GraderScales.fmt(s.edges)} · S ${GraderScales.fmt(s.surface)}",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+            Text(e.label, fontWeight = FontWeight.Bold, color = gradeColor(e.grade))
+        }
+    }
+    Text(
+        "Each company has its own standards; these are estimates from the same measurements.",
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 @Composable
@@ -270,7 +300,10 @@ private fun PriceCard(a: Analysis, vm: MainViewModel) {
         }
         val slab = vm.showSlabValue
         val grade = if (a.grade.reliable) a.grade.overall else null
-        val p = remember(card.id, grade, slab) { PriceEstimator.estimate(card, grade, gradedSlab = slab && grade != null) }
+        var slabGrader by remember { mutableStateOf(Grader.PSA) }
+        val p = remember(card.id, grade, slab, slabGrader) {
+            PriceEstimator.estimate(card, grade, gradedSlab = slab && grade != null, grader = slabGrader)
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(
@@ -286,6 +319,7 @@ private fun PriceCard(a: Analysis, vm: MainViewModel) {
                 Switch(checked = slab && grade != null, enabled = grade != null, onCheckedChange = { vm.showSlabValue = it })
             }
         }
+        if (slab && grade != null) GraderPicker(slabGrader, { slabGrader = it }, includeOther = false)
         Spacer(Modifier.height(8.dp))
         HorizontalDivider()
         Spacer(Modifier.height(8.dp))
@@ -321,7 +355,8 @@ private fun LabelCard(vm: MainViewModel) {
             style = MaterialTheme.typography.bodySmall,
         )
         var type by remember { mutableStateOf<LabelType?>(null) }
-        var company by remember { mutableStateOf("PSA") }
+        var company by remember { mutableStateOf(Grader.PSA) }
+        var otherName by remember { mutableStateOf("") }
         var grade by remember { mutableStateOf("") }
         var cert by remember { mutableStateOf("") }
         LabelType.entries.forEach { t ->
@@ -334,20 +369,22 @@ private fun LabelCard(vm: MainViewModel) {
             }
         }
         if (type == LabelType.GRADED_SLAB) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf("PSA", "BGS", "CGC").forEach { c -> FilterChip(selected = company == c, onClick = { company = c }, label = { Text(c) }) }
+            GraderPicker(company, { company = it }, includeOther = true)
+            if (company == Grader.OTHER) {
+                OutlinedTextField(otherName, { otherName = it.take(30) }, label = { Text("Company name") }, singleLine = true)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(grade, { grade = it.filter { ch -> ch.isDigit() || ch == '.' }.take(4) },
                     label = { Text("Grade") }, singleLine = true, modifier = Modifier.width(100.dp))
-                OutlinedTextField(cert, { cert = it.filter { ch -> ch.isDigit() }.take(12) },
+                OutlinedTextField(cert, { cert = it.filter { ch -> ch in 'a'..'z' || ch in 'A'..'Z' || ch in '0'..'9' || ch == '-' }.uppercase().take(20) },
                     label = { Text("Cert number") }, singleLine = true, modifier = Modifier.weight(1f))
             }
         }
         val g = grade.toDoubleOrNull()
         val ready = when (type) {
             null -> false
-            LabelType.GRADED_SLAB -> g != null && g in 1.0..10.0 && cert.length >= 6
+            LabelType.GRADED_SLAB -> g != null && g in 1.0..10.0 && cert.length >= 4 &&
+                (company != Grader.OTHER || otherName.isNotBlank())
             else -> true
         }
         Button(
@@ -355,10 +392,33 @@ private fun LabelCard(vm: MainViewModel) {
             onClick = {
                 val t = type ?: return@Button
                 vm.uploadScan(
-                    if (t == LabelType.GRADED_SLAB) ScanLabel(t, company, g, cert) else ScanLabel(t),
+                    if (t == LabelType.GRADED_SLAB) {
+                        ScanLabel(t, company.name, g, cert, otherName.takeIf { company == Grader.OTHER })
+                    } else ScanLabel(t),
                 )
             },
         ) { Text("Upload to dataset") }
+    }
+}
+
+@Composable
+private fun GraderPicker(selected: Grader, onSelect: (Grader) -> Unit, includeOther: Boolean) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton(onClick = { open = true }) { Text("Grader: ${selected.displayName}") }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            Grader.entries.filter { includeOther || it != Grader.OTHER }.forEach { gr ->
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(gr.displayName, fontWeight = FontWeight.SemiBold)
+                            Text(gr.note, style = MaterialTheme.typography.bodySmall)
+                        }
+                    },
+                    onClick = { onSelect(gr); open = false },
+                )
+            }
+        }
     }
 }
 
