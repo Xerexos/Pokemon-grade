@@ -4,24 +4,43 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// CI sets these; local builds fall back to version 1 and the debug key.
+val ciVersionCode = System.getenv("VERSION_CODE")?.toIntOrNull()
+val uploadKeystore = System.getenv("UPLOAD_KEYSTORE_PATH")?.let { file(it) }?.takeIf { it.exists() }
+
 android {
     namespace = "com.pokegrade.app"
-    compileSdk = 35
+    // Google Play requires new apps to target Android 16 (API 36).
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.pokegrade.app"
         minSdk = 26
-        targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        targetSdk = 36
+        // Every CI build gets a higher version code so Play accepts it as an update.
+        versionCode = ciVersionCode ?: 1
+        versionName = System.getenv("VERSION_NAME") ?: "1.0"
+    }
+
+    signingConfigs {
+        if (uploadKeystore != null) {
+            create("upload") {
+                storeFile = uploadKeystore
+                storePassword = System.getenv("UPLOAD_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("UPLOAD_KEY_ALIAS")
+                keyPassword = System.getenv("UPLOAD_KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            // Signed with the debug key so the CI-built release APK installs directly.
-            // Replace with your own keystore before publishing to the Play Store.
-            signingConfig = signingConfigs.getByName("debug")
+            // Play builds are signed with your upload key (Google re-signs them with the
+            // app signing key). Without it, release builds use the debug key so the
+            // APK still installs directly for testing.
+            signingConfig = if (uploadKeystore != null) signingConfigs.getByName("upload")
+            else signingConfigs.getByName("debug")
         }
     }
     compileOptions {

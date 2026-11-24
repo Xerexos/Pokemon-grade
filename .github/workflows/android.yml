@@ -4,10 +4,19 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "Upload this build to Google Play"
+        type: boolean
+        default: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      # Every run gets a higher version code, so Play always sees a newer build.
+      VERSION_CODE: ${{ github.run_number }}
+      VERSION_NAME: 1.0.${{ github.run_number }}
     steps:
       - uses: actions/checkout@v4
 
@@ -32,10 +41,66 @@ jobs:
             echo "No GOOGLE_SERVICES_JSON secret: building with dataset uploads disabled"
           fi
 
-      - name: Build APK
-        run: ./gradlew :app:assembleRelease --stacktrace
+      - name: Add upload key (if the secret is set)
+        id: signing
+        env:
+          UPLOAD_KEYSTORE_BASE64: ${{ secrets.UPLOAD_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$UPLOAD_KEYSTORE_BASE64" ]; then
+            echo "$UPLOAD_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/upload.jks"
+            echo "UPLOAD_KEYSTORE_PATH=$RUNNER_TEMP/upload.jks" >> "$GITHUB_ENV"
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+            echo "Signing with the upload key"
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "No UPLOAD_KEYSTORE_BASE64 secret: signing with the debug key (sideload only)"
+          fi
+
+      - name: Build APK and Play bundle
+        env:
+          UPLOAD_KEYSTORE_PASSWORD: ${{ secrets.UPLOAD_KEYSTORE_PASSWORD }}
+          UPLOAD_KEY_ALIAS: ${{ secrets.UPLOAD_KEY_ALIAS }}
+          UPLOAD_KEY_PASSWORD: ${{ secrets.UPLOAD_KEY_PASSWORD }}
+        run: ./gradlew :app:assembleRelease :app:bundleRelease --stacktrace
 
       - uses: actions/upload-artifact@v4
         with:
           name: PokeGrade-apk
           path: app/build/outputs/apk/release/*.apk
+
+      - uses: actions/upload-artifact@v4
+        if: steps.signing.outputs.signed == 'true'
+        with:
+          name: PokeGrade-play-bundle
+          path: app/build/outputs/bundle/release/*.aab
+
+      # Publishing happens only when you ask for it:
+      #  - run this workflow by hand with "Upload this build to Google Play" ticked, or
+      #  - set repository variable PLAY_AUTO_PUBLISH=true to publish every push to PLAY_BRANCH (default: main).
+      - name: Decide whether to publish
+        id: publish
+        env:
+          HAS_PLAY_KEY: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
+          SIGNED: ${{ steps.signing.outputs.signed }}
+          MANUAL: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
+          AUTO: ${{ github.event_name == 'push' && vars.PLAY_AUTO_PUBLISH == 'true' && github.ref_name == (vars.PLAY_BRANCH || 'main') }}
+        run: |
+          if [ "$HAS_PLAY_KEY" = "true" ] && [ "$SIGNED" = "true" ] && { [ "$MANUAL" = "true" ] || [ "$AUTO" = "true" ]; }; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+            echo "Publishing to Google Play"
+          else
+            echo "go=false" >> "$GITHUB_OUTPUT"
+            echo "Not publishing (play key: $HAS_PLAY_KEY, signed: $SIGNED, manual: $MANUAL, auto: $AUTO)"
+          fi
+
+      - name: Upload to Google Play
+        if: steps.publish.outputs.go == 'true'
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: com.pokegrade.app
+          releaseFiles: app/build/outputs/bundle/release/*.aab
+          # internal -> closed (alpha) -> production; promote in Play Console when ready.
+          track: ${{ vars.PLAY_TRACK || 'internal' }}
+          # Must be "draft" until the app's first release is published in Play Console.
+          status: ${{ vars.PLAY_RELEASE_STATUS || 'completed' }}
