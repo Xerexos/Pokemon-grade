@@ -171,4 +171,18 @@ class CatalogAndAuthTest {
         assertEquals(60, CardTextParser.parse(listOf(OcrLine("Pikachu PV 60", 0.1, 0.04, 0.04))).hp)
         assertEquals("Nachtara VMAX", CardTextParser.parse(listOf(OcrLine("BASIS Nachtara VMAX KP310", 0.1, 0.04, 0.04))).name)
     }
+
+    /** OCR of the Hisuian Growlithe screenshot: the HP was read as "w80円". */
+    @Test
+    fun hpMisreadIsNotTheName() {
+        val t = CardTextParser.parse(listOf(
+            OcrLine("基础", 0.06, 0.02, 0.015),
+            OcrLine("洗翠 卡蒂狗", 0.18, 0.035, 0.03),
+            OcrLine("w80円", 0.74, 0.03, 0.045),
+            OcrLine("烧光", 0.38, 0.58, 0.02),
+        ))
+        assertEquals("洗翠 卡蒂狗", t.name)
+        assertEquals(80, t.hp)
+        assertEquals("zh-cn", t.languages.first())
+    }
 }

@@ -87,8 +87,8 @@ object CardTextParser {
     }
 
     /** Common card-text characters that differ between Simplified and Traditional Chinese. */
-    private const val SIMPLIFIED = "龙击发进阶伤对战场宝梦为从张个时将后气种连选这们备给让该战点损态"
-    private const val TRADITIONAL = "龍擊發進階傷對戰場寶夢為從張個時將後氣種連選這們備給讓該戰點損態"
+    private const val SIMPLIFIED = "龙击发进阶伤对战场宝梦为从张个时将后气种连选这们备给让该点损态础烧闪电恶钢虫飞冲无动级极灵斗体卡奖弃换输赢术护伙变"
+    private const val TRADITIONAL = "龍擊發進階傷對戰場寶夢為從張個時將後氣種連選這們備給讓該點損態礎燒閃電惡鋼蟲飛衝無動級極靈鬥體獎棄換輸贏術護夥變"
 
     private val KANA = setOf(Character.UnicodeBlock.HIRAGANA, Character.UnicodeBlock.KATAKANA, Character.UnicodeBlock.KATAKANA_PHONETIC_EXTENSIONS)
     private val HANGUL = setOf(Character.UnicodeBlock.HANGUL_SYLLABLES, Character.UnicodeBlock.HANGUL_JAMO, Character.UnicodeBlock.HANGUL_COMPATIBILITY_JAMO)
@@ -125,6 +125,14 @@ object CardTextParser {
             ?: lines.filter { it.top < 0.12 && it.left > 0.5 }
                 .firstNotNullOfOrNull { BARE_HP.find(it.text.trim())?.groupValues?.get(1)?.toIntOrNull() }
                 ?.takeIf { it % 10 == 0 && it in 30..400 }
+            // Misread label around the number, e.g. "w80円": take the number if the
+            // rest of the line is just a few stray characters.
+            ?: lines.filter { it.top < 0.12 && it.left > 0.5 }
+                .firstNotNullOfOrNull { l ->
+                    val m = Regex("""(?<!\d)(\d{2,3})(?!\d)""").find(l.text) ?: return@firstNotNullOfOrNull null
+                    val rest = l.text.replace(m.value, "").count { !it.isWhitespace() }
+                    m.groupValues[1].toIntOrNull()?.takeIf { rest <= 4 && it % 10 == 0 && it in 30..400 }
+                }
 
         return ParsedCardText(
             name = guessName(lines),
@@ -139,6 +147,9 @@ object CardTextParser {
     private fun guessName(lines: List<OcrLine>): String? {
         val candidates = lines
             .filter { it.top < 0.16 }
+            // The HP sits in the top-right and contains a number ("HP80", often misread
+            // as "w80円"); the name is on the left and never has a two-digit number.
+            .filter { !(it.left >= 0.5 && Regex("""\d{2,}""").containsMatchIn(it.text)) }
             .map { it to cleanName(it.text) }
             .filter { (_, n) ->
                 // CJK names can be just two characters (e.g. 喵喵).
@@ -173,7 +184,9 @@ object CardTextParser {
         // Keep the name and any suffix words; drop trailing noise (e.g. a stray "170").
         val out = mutableListOf(words[0])
         for (w in words.drop(1)) {
-            if (w.lowercase().removeSuffix(".") in SUFFIXES || w.first().isUpperCase() && w.all { it.isLetter() || it == '\'' || it == '.' }) out += w
+            val cjkWord = isCjk(w) && w.all { it.isLetter() }
+            if (w.lowercase().removeSuffix(".") in SUFFIXES || cjkWord ||
+                w.first().isUpperCase() && w.all { it.isLetter() || it == '\'' || it == '.' }) out += w
             else break
         }
         return out.joinToString(" ").replace("©x", "ex")
