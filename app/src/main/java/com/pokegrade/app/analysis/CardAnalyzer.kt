@@ -83,28 +83,30 @@ class CardAnalyzer(private val catalog: CardCatalog = TcgDexClient()) {
         // Downscale to the grader's working size so its bounds map 1:1 onto this bitmap.
         val working = withContext(Dispatchers.Default) { downscale(photo, GRADER_SIZE) }
 
-        // Is it in a graded slab? Read the label and only measure the card below it.
+        // Is it in a graded slab? Read the label (label text is small, so use a
+        // high-resolution copy) and only measure the card below it.
         onProgress("Looking for a slab label…")
-        val slab = recognize(latin, InputImage.fromBitmap(working, 0), working)?.let(SlabLabelParser::parse)
-        val offsetY = if (slab != null) ((slab.labelBottom + 0.01) * working.height).toInt().coerceIn(0, working.height / 2) else 0
-        val area = if (offsetY > 0) crop(working, 0, offsetY, working.width, working.height - offsetY) else working
+        val hi = downscale(photo, 2400)
+        var slab = recognize(latin, InputImage.fromBitmap(hi, 0), hi)?.let(SlabLabelParser::parse)
 
         onProgress("Measuring centering, corners, edges and surface…")
-        val grade = withContext(Dispatchers.Default) { grader.grade(area.toRgbImage()) }
-        // Bounds are in the working image; crop the card from the full-resolution photo
-        // (capped at 2000 px) so text reading, the AI check and uploads get the detail.
-        val k = photo.width.toDouble() / working.width
-        val cardBitmap = downscale(
-            crop(
-                photo,
-                (grade.bounds.left * k).toInt(), ((grade.bounds.top + offsetY) * k).toInt(),
-                (grade.bounds.width * k).toInt(), (grade.bounds.height * k).toInt(),
-            ),
-            2000,
-        )
+        var offsetY = slabOffset(slab, working.height)
+        var (grade, cardBitmap) = measure(photo, working, offsetY)
 
         onProgress("Reading card text…")
-        val text = readText(cardBitmap)
+        var (text, lines) = readText(cardBitmap)
+
+        // Second chance: if the card crop still contains a label (e.g. the label
+        // text was too small in the whole photo), cut it off and measure again.
+        if (slab == null) {
+            SlabLabelParser.parse(lines)?.let { inCrop ->
+                slab = inCrop
+                offsetY = (grade.bounds.top + inCrop.labelBottom * grade.bounds.height + 0.01 * working.height)
+                    .toInt().coerceIn(0, working.height * 2 / 3)
+                measure(photo, working, offsetY).let { grade = it.first; cardBitmap = it.second }
+                readText(cardBitmap).let { text = it.first; lines = it.second }
+            }
+        }
 
         onProgress("Looking up ${text.name ?: "card"}…")
         var lookupError: String? = null
@@ -120,6 +122,27 @@ class CardAnalyzer(private val catalog: CardCatalog = TcgDexClient()) {
             pickByPhoto(cardBitmap, ranked, text)
         } else ranked
         return finish(cardBitmap, grade, text, candidates, candidates.firstOrNull(), lookupError, null, onProgress).copy(slab = slab)
+    }
+
+    private fun slabOffset(slab: SlabLabel?, height: Int): Int =
+        if (slab == null) 0 else ((slab.labelBottom + 0.01) * height).toInt().coerceIn(0, height * 2 / 3)
+
+    /** Grade the part of the photo below [offsetY] and crop the card at full resolution. */
+    private suspend fun measure(photo: Bitmap, working: Bitmap, offsetY: Int): Pair<GradeResult, Bitmap> {
+        val area = if (offsetY > 0) crop(working, 0, offsetY, working.width, working.height - offsetY) else working
+        val grade = withContext(Dispatchers.Default) { grader.grade(area.toRgbImage()) }
+        // Bounds are in the working image; crop the card from the full-resolution photo
+        // (capped at 2000 px) so text reading, the AI check and uploads get the detail.
+        val k = photo.width.toDouble() / working.width
+        val card = downscale(
+            crop(
+                photo,
+                (grade.bounds.left * k).toInt(), ((grade.bounds.top + offsetY) * k).toInt(),
+                (grade.bounds.width * k).toInt(), (grade.bounds.height * k).toInt(),
+            ),
+            2000,
+        )
+        return grade to card
     }
 
     /** Re-run authenticity and price for a different database match chosen by the user. */
@@ -206,7 +229,7 @@ class CardAnalyzer(private val catalog: CardCatalog = TcgDexClient()) {
      * model. Those models download through Play services on first use; if one
      * isn't ready yet we just fall back to what we have.
      */
-    private suspend fun readText(card: Bitmap): ParsedCardText = coroutineScope {
+    private suspend fun readText(card: Bitmap): Pair<ParsedCardText, List<OcrLine>> = coroutineScope {
         val image = InputImage.fromBitmap(card, 0)
         // Run every script's reader: English text on a card (or label) mustn't
         // hide Asian text. Each also reads Latin, so the richest result wins.
@@ -226,7 +249,8 @@ class CardAnalyzer(private val catalog: CardCatalog = TcgDexClient()) {
             ja != null && cjkCount(ja) >= 2 -> ja
             else -> latinLines
         }
-        CardTextParser.parse(best)
+        // Labels are English even on Asian cards, so check the Latin lines for one too.
+        CardTextParser.parse(best) to (latinLines + best).distinct()
     }
 
     private fun kanaCount(lines: List<OcrLine>) = lines.sumOf { l ->

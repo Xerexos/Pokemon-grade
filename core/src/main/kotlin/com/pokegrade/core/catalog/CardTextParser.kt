@@ -35,6 +35,9 @@ object CardTextParser {
         "evolves", "trainer", "item", "supporter", "stadium", "energy",
         "pokémon tool", "pokemon tool", "put ", "illus", "hp", "ability", "weakness", "resistance",
         "retreat", "tera", "rule", "pokémon ex rule", "pokemon ex rule",
+        // Slab label words.
+        "gem mint", "gem mt", "mint", "pristine", "black label", "nm-mt", "near mint", "authentic",
+        "pokemon", "pokémon", "diamond service", "professional sports", "beckett", "certified",
     )
 
     /** Stage text printed on the same line, before the name (several languages). */

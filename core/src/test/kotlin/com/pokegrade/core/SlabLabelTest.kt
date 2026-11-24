@@ -81,4 +81,25 @@ class SlabLabelTest {
         val text = CardTextParser.parse(listOf(OcrLine("HP220", 0.75, 0.04, 0.03), OcrLine("030/115", 0.05, 0.95, 0.015)))
         assertTrue(!CardRanker.plausible(murkrow, text))
     }
+
+    /** What OCR actually managed in the second screenshot: no logo, no "10". */
+    @Test
+    fun detectsSlabFromGradeWordsAndCertOnly() {
+        val lines = listOf(
+            OcrLine("2025 POKEMON GEM PACK VOL.1", 0.08, 0.02, 0.02),
+            OcrLine("CAPTAIN PIKACHU", 0.08, 0.06, 0.02),
+            OcrLine("GEM MINT", 0.72, 0.03, 0.02),
+            OcrLine("8169090106", 0.72, 0.1, 0.015),
+            OcrLine("皮卡丘", 0.2, 0.27, 0.03),
+        )
+        val s = SlabLabelParser.parse(lines)
+        println(s)
+        assertNotNull(s)
+        assertEquals("8169090106", s.certNumber)
+        assertEquals("GEM MINT", s.gradeWords)
+        assertEquals(10.0, s.grade)
+        // And the parser must not call the card "GEM MINT".
+        val t = CardTextParser.parse(listOf(OcrLine("GEM MINT", 0.7, 0.03, 0.05), OcrLine("船长皮卡丘", 0.2, 0.08, 0.03)))
+        assertEquals("船长皮卡丘", t.name)
+    }
 }

@@ -34,6 +34,8 @@ object SlabLabelParser {
     /** Text on labels that identifies the company. Longest phrases first. */
     private val COMPANY_WORDS = listOf(
         "DIAMOND SERVICE GRADING" to "DSG",
+        "DIAMOND SERVICE" to "DSG",
+        "SERVICE GRADING" to "DSG",
         "PROFESSIONAL SPORTS AUTHENTICATOR" to "PSA",
         "BECKETT" to "BGS",
         "CGC" to "CGC", "PSA" to "PSA", "BGS" to "BGS", "SGC" to "SGC", "TAG" to "TAG",
@@ -94,7 +96,9 @@ object SlabLabelParser {
         }
 
         // It's a slab if we found a company name, or a grade together with a cert number.
-        if (companyHit == null && !(grade != null && cert != null)) return null
+        // It's a slab if we found a company name, or grade words / a grade together with
+        // a cert number. (Logos like DSG's script are often unreadable.)
+        if (companyHit == null && !(cert != null && (grade != null || gradeWords != null))) return null
 
         val anchors = listOfNotNull(companyHit?.first, cert?.first, gradeLine)
         val anchorBottom = anchors.maxOf { it.top + it.height }
@@ -109,14 +113,37 @@ object SlabLabelParser {
             .map { it.second }
             .filter { t -> COMPANY_WORDS.none { (w, _) -> t.contains(w) } && !CERT.containsMatchIn(t) && INLINE_GRADE.find(t) == null && GRADE_WORDS.none { t == it } }
 
+        // The big grade digit is often a stylised graphic OCR can't read; the words
+        // printed next to it still pin it down.
+        val company = companyHit?.second
+        val finalGrade = grade ?: gradeWords?.let { gradeFromWords(it, company) }
+
         return SlabLabel(
-            company = companyHit?.second,
-            grade = grade,
+            company = company,
+            grade = finalGrade,
             gradeWords = gradeWords,
             certNumber = cert?.second,
             description = description,
             labelBottom = bottom.coerceIn(0.0, 0.6),
         )
+    }
+
+    /** Standard label wording for each grade. Beckett prints "Gem Mint" on a 9.5. */
+    fun gradeFromWords(words: String, company: String?): Double? = when (words.uppercase()) {
+        "BLACK LABEL", "PRISTINE" -> 10.0
+        "GEM MINT" -> if (company == "BGS") 9.5 else 10.0
+        "MINT+" -> 9.5
+        "MINT" -> 9.0
+        "NM-MT", "NM MT" -> 8.0
+        "NEAR MINT" -> 7.0
+        "EX-MT", "EX MT" -> 6.0
+        "EXCELLENT" -> 5.0
+        "VG-EX" -> 4.0
+        "VERY GOOD" -> 3.0
+        "GOOD" -> 2.0
+        "FAIR" -> 1.5
+        "POOR" -> 1.0
+        else -> null
     }
 
     private fun normalizeWords(w: String) = w.replace(Regex("""\s+"""), " ").replace("GEM MT", "GEM MINT").replace("GEM-MT", "GEM MINT").trim()
