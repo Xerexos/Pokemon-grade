@@ -14,6 +14,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -63,6 +64,23 @@ fun SettingsScreen(vm: MainViewModel) {
             style = MaterialTheme.typography.bodySmall,
         )
         if (hasRef) OutlinedButton(onClick = vm::clearReference) { Text("Clear reference back") }
+
+        Text("Shared dataset", style = MaterialTheme.typography.titleMedium)
+        if (!vm.dataset.available) {
+            Text("Not set up in this build of the app.", style = MaterialTheme.typography.bodySmall)
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Upload labelled scans to help improve grading and fake detection", Modifier.weight(1f))
+                Switch(checked = vm.shareScans, onCheckedChange = vm::setShareScans)
+            }
+            vm.anonymousId?.let { Text("Your anonymous ID: $it", style = MaterialTheme.typography.bodySmall) }
+            OutlinedButton(onClick = vm::deleteMyScans) { Text("Delete my uploaded scans") }
+            vm.settingsMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+        }
+
+        var showPolicy by remember { mutableStateOf(false) }
+        TextButton(onClick = { showPolicy = !showPolicy }) { Text(if (showPolicy) "Hide privacy policy" else "Privacy policy") }
+        if (showPolicy) Text(rememberPolicyText(), style = MaterialTheme.typography.bodySmall)
 
         Text(
             "Card data and prices come from the free TCGdex database (TCGplayer and Cardmarket prices, updated daily).",

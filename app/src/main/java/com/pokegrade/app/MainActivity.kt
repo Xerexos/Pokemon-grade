@@ -26,6 +26,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.pokegrade.app.ui.CameraScreen
+import com.pokegrade.app.ui.ConsentScreen
 import com.pokegrade.app.ui.ResultScreen
 import com.pokegrade.app.ui.SettingsScreen
 
@@ -42,6 +43,14 @@ class MainActivity : ComponentActivity() {
 fun App(vm: MainViewModel) {
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         when (val s = vm.screen) {
+            Screen.Consent -> {
+                val activity = androidx.compose.ui.platform.LocalContext.current as? android.app.Activity
+                ConsentScreen(
+                    datasetAvailable = vm.dataset.available,
+                    onAccept = vm::acceptPolicy,
+                    onDecline = { activity?.finish() },
+                )
+            }
             Screen.Camera -> CameraScreen(onPhoto = vm::onPhoto, onSettings = vm::openSettings)
             Screen.BackCamera -> {
                 BackHandler { vm.back() }

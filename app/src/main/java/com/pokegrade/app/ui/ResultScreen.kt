@@ -44,6 +44,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -65,6 +67,9 @@ import coil.compose.AsyncImage
 import com.pokegrade.app.AiState
 import com.pokegrade.app.MainViewModel
 import com.pokegrade.app.SearchState
+import com.pokegrade.app.UploadState
+import com.pokegrade.app.data.LabelType
+import com.pokegrade.app.data.ScanLabel
 import com.pokegrade.app.analysis.Analysis
 import com.pokegrade.core.auth.CheckStatus
 import com.pokegrade.core.auth.Verdict
@@ -91,6 +96,7 @@ fun ResultScreen(a: Analysis, vm: MainViewModel) {
         AuthenticityCard(a, vm)
         PriceCard(a, vm)
         AiCard(vm)
+        if (vm.dataset.available && vm.shareScans) LabelCard(vm)
         Button(onClick = vm::scanAnother, modifier = Modifier.fillMaxWidth()) {
             Icon(Icons.Default.CameraAlt, null); Spacer(Modifier.width(8.dp)); Text("Scan another card")
         }
@@ -288,6 +294,61 @@ private fun PriceCard(a: Analysis, vm: MainViewModel) {
         p.tcgplayerUrl?.let { url ->
             TextButton(onClick = { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }) { Text("View on TCGplayer") }
         }
+    }
+}
+
+@Composable
+private fun LabelCard(vm: MainViewModel) {
+    Section("Help improve PokéGrade") {
+        when (val u = vm.upload) {
+            is UploadState.Done -> { Text("Uploaded. Thanks!", color = GOOD); return@Section }
+            UploadState.Uploading -> { Row { CircularProgressIndicator(Modifier.size(20.dp)); Spacer(Modifier.width(8.dp)); Text("Uploading…") }; return@Section }
+            is UploadState.Failed -> Text(u.message, color = BAD)
+            UploadState.Idle -> {}
+        }
+        Text(
+            "Only upload if you know the answer from outside the app. Your label is what the app learns from.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        var type by remember { mutableStateOf<LabelType?>(null) }
+        var company by remember { mutableStateOf("PSA") }
+        var grade by remember { mutableStateOf("") }
+        var cert by remember { mutableStateOf("") }
+        LabelType.entries.forEach { t ->
+            Row(Modifier.fillMaxWidth().clickable { type = t }, verticalAlignment = Alignment.CenterVertically) {
+                RadioButton(selected = type == t, onClick = { type = t })
+                Column {
+                    Text(t.title, fontWeight = FontWeight.SemiBold)
+                    Text(t.description, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+        if (type == LabelType.GRADED_SLAB) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("PSA", "BGS", "CGC").forEach { c -> FilterChip(selected = company == c, onClick = { company = c }, label = { Text(c) }) }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(grade, { grade = it.filter { ch -> ch.isDigit() || ch == '.' }.take(4) },
+                    label = { Text("Grade") }, singleLine = true, modifier = Modifier.width(100.dp))
+                OutlinedTextField(cert, { cert = it.filter { ch -> ch.isDigit() }.take(12) },
+                    label = { Text("Cert number") }, singleLine = true, modifier = Modifier.weight(1f))
+            }
+        }
+        val g = grade.toDoubleOrNull()
+        val ready = when (type) {
+            null -> false
+            LabelType.GRADED_SLAB -> g != null && g in 1.0..10.0 && cert.length >= 6
+            else -> true
+        }
+        Button(
+            enabled = ready,
+            onClick = {
+                val t = type ?: return@Button
+                vm.uploadScan(
+                    if (t == LabelType.GRADED_SLAB) ScanLabel(t, company, g, cert) else ScanLabel(t),
+                )
+            },
+        ) { Text("Upload to dataset") }
     }
 }
 

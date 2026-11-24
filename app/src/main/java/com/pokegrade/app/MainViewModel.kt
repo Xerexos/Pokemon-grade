@@ -9,6 +9,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.pokegrade.app.analysis.Analysis
 import com.pokegrade.app.analysis.CardAnalyzer
+import com.pokegrade.app.data.DatasetUploader
+import com.pokegrade.app.data.ScanLabel
 import com.pokegrade.app.data.Settings
 import com.pokegrade.core.ai.AiInspection
 import com.pokegrade.core.catalog.CardBrief
@@ -16,6 +18,7 @@ import com.pokegrade.core.catalog.TcgCard
 import kotlinx.coroutines.launch
 
 sealed interface Screen {
+    data object Consent : Screen
     data object Camera : Screen
     data object BackCamera : Screen
     data class Working(val message: String) : Screen
@@ -31,6 +34,13 @@ sealed interface AiState {
     data class Failed(val message: String) : AiState
 }
 
+sealed interface UploadState {
+    data object Idle : UploadState
+    data object Uploading : UploadState
+    data class Done(val scanId: String) : UploadState
+    data class Failed(val message: String) : UploadState
+}
+
 sealed interface SearchState {
     data object Closed : SearchState
     data class Open(val query: String = "", val loading: Boolean = false, val results: List<CardBrief> = emptyList(), val error: String? = null) : SearchState
@@ -39,7 +49,20 @@ sealed interface SearchState {
 class MainViewModel(app: Application) : AndroidViewModel(app) {
     val settings = Settings(app)
 
-    var screen by mutableStateOf<Screen>(Screen.Camera)
+    val dataset = DatasetUploader(app)
+
+    var screen by mutableStateOf<Screen>(
+        if (settings.acceptedPolicyVersion < POLICY_VERSION) Screen.Consent else Screen.Camera,
+    )
+        private set
+    var upload by mutableStateOf<UploadState>(UploadState.Idle)
+        private set
+    var shareScans by mutableStateOf(settings.shareScans)
+        private set
+    /** Anonymous install ID, shown in Settings for deletion requests. */
+    var anonymousId by mutableStateOf<String?>(null)
+        private set
+    var settingsMessage by mutableStateOf<String?>(null)
         private set
     var ai by mutableStateOf<AiState>(AiState.Idle)
         private set
@@ -54,8 +77,53 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val analyzer = CardAnalyzer()
     private var last: Analysis? = null
 
+    // ---------------------------------------------------------- consent
+
+    fun acceptPolicy(share: Boolean) {
+        settings.acceptedPolicyVersion = POLICY_VERSION
+        setShareScans(share)
+        screen = Screen.Camera
+    }
+
+    fun setShareScans(on: Boolean) {
+        settings.shareScans = on
+        shareScans = on
+        if (on) loadAnonymousId()
+    }
+
+    fun loadAnonymousId() {
+        if (!dataset.available) return
+        viewModelScope.launch { anonymousId = runCatching { dataset.anonymousId() }.getOrNull() }
+    }
+
+    // ---------------------------------------------------------- dataset
+
+    fun uploadScan(label: ScanLabel) {
+        val current = last ?: return
+        upload = UploadState.Uploading
+        viewModelScope.launch {
+            upload = try {
+                UploadState.Done(dataset.upload(current, label))
+            } catch (e: Exception) {
+                UploadState.Failed(e.message ?: "Upload failed.")
+            }
+        }
+    }
+
+    fun deleteMyScans() {
+        settingsMessage = "Deleting…"
+        viewModelScope.launch {
+            settingsMessage = try {
+                "Deleted ${dataset.deleteMine()} uploaded scan(s)."
+            } catch (e: Exception) {
+                "Couldn't delete: ${e.message}"
+            }
+        }
+    }
+
     fun onPhoto(photo: Bitmap) {
         ai = AiState.Idle
+        upload = UploadState.Idle
         screen = Screen.Working("Starting…")
         viewModelScope.launch {
             try {
@@ -166,7 +234,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------------------------------------------------------- navigation
 
-    fun openSettings() { screen = Screen.Settings }
+    fun openSettings() {
+        settingsMessage = null
+        if (shareScans) loadAnonymousId()
+        screen = Screen.Settings
+    }
 
     fun saveSettings(anthropicKey: String, autoAi: Boolean) {
         settings.anthropicApiKey = anthropicKey
@@ -183,6 +255,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         ai = AiState.Idle
         search = SearchState.Closed
         screen = Screen.Camera
+    }
+
+    companion object {
+        /** Bump when PRIVACY.md changes so everyone re-accepts. */
+        const val POLICY_VERSION = 1
     }
 
     private fun show(a: Analysis) {

@@ -69,4 +69,15 @@ dependencies {
 
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+
+    // Shared dataset (only active when app/google-services.json is present).
+    implementation(platform("com.google.firebase:firebase-bom:33.7.0"))
+    implementation("com.google.firebase:firebase-firestore")
+    implementation("com.google.firebase:firebase-auth")
+}
+
+// Firebase config comes from app/google-services.json (kept out of git; CI writes it
+// from the GOOGLE_SERVICES_JSON secret). Without it the app builds with uploads disabled.
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
 }

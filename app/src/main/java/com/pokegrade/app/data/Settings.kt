@@ -29,9 +29,21 @@ class Settings(context: Context) {
 
     val hasAi get() = anthropicApiKey.isNotBlank()
 
+    /** Version of the privacy policy the user accepted (0 = none). */
+    var acceptedPolicyVersion: Int
+        get() = prefs.getInt(KEY_POLICY, 0)
+        set(v) = prefs.edit().putInt(KEY_POLICY, v).apply()
+
+    /** User opted in to uploading labelled scans. */
+    var shareScans: Boolean
+        get() = prefs.getBoolean(KEY_SHARE, false)
+        set(v) = prefs.edit().putBoolean(KEY_SHARE, v).apply()
+
     private companion object {
         const val KEY_ANTHROPIC = "anthropic_key"
         const val KEY_AUTO_AI = "auto_ai"
         const val KEY_REF_BACK = "reference_back"
+        const val KEY_POLICY = "policy_version"
+        const val KEY_SHARE = "share_scans"
     }
 }

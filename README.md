@@ -84,6 +84,12 @@ It skips lots, proxies, Japanese cards and ambiguous titles such as "PSA 8 or 9"
 
 The photos belong to the sellers and show cards inside slabs. Keep them for your own testing, and follow eBay's API License Agreement.
 
+## Shared dataset & privacy
+
+You and your friends can label scans ("graded slab + cert number", "pulled from a pack", "confirmed fake") and upload them to a private Firebase project. The owner then verifies PSA certs and retrains or re-tunes the app from them.
+
+Everyone must accept the [privacy policy](app/src/main/assets/PRIVACY.md) on first launch. Uploading is a separate opt-in. **Setup steps: [SETUP.md](SETUP.md).**
+
 ## Settings
 
 - **Anthropic API key** (optional): turns on the "AI second opinion". Each inspection is billed to your Anthropic account. Photos are only sent when you ask for it, or when you turn on auto mode.
